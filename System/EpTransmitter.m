@@ -1,5 +1,5 @@
-classdef AfdmTransmitter < handle
-    % AfdmTransmitter: AFDM 信号生成、调制、导频插入与组帧
+classdef EpTransmitter < handle
+    % EpTransmitter: AFDM 信号生成、调制、导频插入与组帧
     %
     % 整理版 — 清除脉冲成形相关代码, 保留核心发射链路:
     %   QAM 调制 → 导频插入 → 帧组装 → IDAFT 变换 → 添加前缀 (CPP)
@@ -10,7 +10,7 @@ classdef AfdmTransmitter < handle
 
     methods (Access = public)
 
-        function obj = AfdmTransmitter(configObj)
+        function obj = EpTransmitter(configObj)
             obj.Config = configObj;
         end
 

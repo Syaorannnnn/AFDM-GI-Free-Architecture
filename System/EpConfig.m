@@ -1,4 +1,4 @@
-classdef AfdmConfig < handle
+classdef EpConfig < handle
     % AfdmConfig: AFDM 系统全局参数配置与资源映射类
     %
     % 整理版 — 保留核心功能:
@@ -11,20 +11,20 @@ classdef AfdmConfig < handle
 
     properties (Access = public)
         % --- 基础通信参数 ---
-        BitsPerSymbol (1, 1) double = 2
+        BitsPerSymbol   (1, 1) double = 2
         ModulationOrder (1, 1) double = 4
-        WaveformType (1, 1) string = "AFDM"
+        WaveformType    (1, 1) string = "AFDM"
 
         % --- 物理层帧结构 ---
         NumDataSubcarriers (1, 1) double = 256
-        MaxNormDoppler (1, 1) double = 2
-        MaxPathDelays (1, 1) double = 5
-        DopplerGuard (1, 1) double = 4
-        NumPaths (1, 1) double = 3
+        MaxNormDoppler     (1, 1) double = 2
+        MaxPathDelays      (1, 1) double = 5
+        DopplerGuard       (1, 1) double = 4
+        NumPaths           (1, 1) double = 3
 
         % --- 导频配置 ---
-        PilotType (1, 1) string = "CAZAC" % "Single" 或 "CAZAC"
-        PilotSnr (1, 1) double = 35 % 导频信噪比 (dB)
+        PilotType (1, 1) string = "CAZAC"  % "Single" 或 "CAZAC"
+        PilotSnr  (1, 1) double = 35       % 导频信噪比 (dB)
 
         % --- ZP 手动覆盖 ---
         % 设为正值时覆盖自动计算的 ZP, 设为 0 时恢复自动 (默认)
@@ -50,7 +50,7 @@ classdef AfdmConfig < handle
 
     methods
 
-        function obj = AfdmConfig()
+        function obj = EpConfig()
             obj.updateDerivedParams();
         end
 

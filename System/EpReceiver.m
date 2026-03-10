@@ -1,5 +1,5 @@
-classdef AfdmReceiver < handle
-    % AfdmReceiver: AFDM 接收机 — 整理版
+classdef EpReceiver < handle
+    % EpReceiver: AFDM 接收机 — 整理版
     %
     % 核心功能:
     %   1. 信道估计: 时域相关搜索 + 分数多普勒精搜 + 全局 LS 优化
@@ -35,7 +35,7 @@ classdef AfdmReceiver < handle
 
     methods (Access = public)
 
-        function obj = AfdmReceiver(configObj)
+        function obj = EpReceiver(configObj)
             obj.Config = configObj;
         end
 
