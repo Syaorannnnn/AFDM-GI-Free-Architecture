@@ -45,7 +45,7 @@ classdef AfdmTransforms
             outputSignal = ifft(inputSignal) .* sqrt(signalLength);
         end
 
-        %% 等效信道矩阵 (性能优化版)
+        %% 等效信道矩阵
 
         function effectiveChannelMatrix = generateEffectiveChannelMatrix(physicalChannelMatrix, configParams)
             % generateEffectiveChannelMatrix - 优化版
