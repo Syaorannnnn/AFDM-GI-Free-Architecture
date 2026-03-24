@@ -23,6 +23,7 @@ classdef GiFreeSystem < handle
             arguments
                 cfg (1,1) GiFreeConfig
             end
+            cfg.validate();    % 构造时强制检查论文定理1约束
             obj.Config         = cfg;
             obj.Transmitter    = GiFreeTransmitter(cfg);
             obj.ChannelBuilder = FractionalChannelBuilder(cfg);
@@ -40,6 +41,9 @@ classdef GiFreeSystem < handle
         function result = runTrial(obj, dataSnrLinear, noisePower)
             cfg   = obj.Config;
             numSc = cfg.NumSubcarriers;
+
+            % 防御性清零: 确保每轮 trial 从干净的 c2 状态开始
+            cfg.C2Override = [];
 
             % ---- 1. 发射: DAFT 域组帧 (不依赖 c2) ----
             [txFrame, txDataIndices] = obj.Transmitter.transmit(dataSnrLinear);

@@ -43,6 +43,21 @@ classdef GiFreeConfig < handle
 
     methods
 
+        function validate(obj)
+            % validate  检查论文A定理1约束 (公式56)
+            %   约束: 2*alpha_max*l_max + 2*alpha_max + l_max < N
+            %   若违反, hEff 的模运算产生歧义, 有效信道矩阵构造错误.
+            lhs = 2 * obj.MaxDopplerIndex * obj.MaxDelaySpread ...
+                + 2 * obj.MaxDopplerIndex + obj.MaxDelaySpread;
+            if lhs >= obj.NumSubcarriers
+                error('GiFreeConfig:Theorem1Violation', ...
+                    ['论文A定理1约束违反: 2*alpha_max*l_max + 2*alpha_max + l_max = %d >= N = %d\n' ...
+                     '请减小 MaxDopplerIndex (%d) 或 MaxDelaySpread (%d), 或增大 NumSubcarriers (%d).'], ...
+                    lhs, obj.NumSubcarriers, ...
+                    obj.MaxDopplerIndex, obj.MaxDelaySpread, obj.NumSubcarriers);
+            end
+        end
+
         function val = get.ChirpParam1(obj)
             val = (2 * (obj.MaxDopplerIndex + obj.DopplerGuard) + 1) ...
                 / (2 * obj.NumSubcarriers);

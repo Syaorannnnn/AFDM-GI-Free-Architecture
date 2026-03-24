@@ -2,7 +2,7 @@
 %
 %  叙事主线: AFDM 能否同时实现高频谱效率和高可靠性?
 %
-%  Part 1 — AFDM vs OFDM (分数多普勒, EP 架构, Perfect CSI 对比)
+%  Part 1 — AFDM vs OFDM (分数多普勒, 各自原生导频方案公平对比)
 %  Part 2 — EP vs GI-Free (整数多普勒, 频谱效率对比)
 %  Part 3a — CFAR 自适应门限 vs 论文固定门限 (路径数不确定)
 %  Part 3b — 分数多普勒: 整数接收机 vs 分数接收机 (error floor)
@@ -14,7 +14,7 @@
 %    黑色虚线方块  — 理想参考 (Perfect CSI / 理想值)
 %    紫色虚线方块  — 论文迭代 (仅 Part 3a)
 
-clear all; close all; clc;
+clear; close all; clc;
 addpath(genpath("./"));
 
 fprintf('============================================================\n');
@@ -51,79 +51,110 @@ cPurple = [0.49 0.18 0.56];    % 论文迭代
 %  Part 1: AFDM vs OFDM
 %  ################################################################
 fprintf('==================== Part 1: AFDM vs OFDM ====================\n');
-fprintf('  Fractional Doppler, EP architecture\n');
-fprintf('  Only difference: modulation basis (chirp vs sinusoid)\n\n');
+fprintf('  AFDM: EP 单导频 + DAFT 域估计\n');
+fprintf('  OFDM: 梳状导频 LS + DFT 插值 + 单抽头 MMSE (标准基线)\n\n');
 
 dopplerGuard1 = 4;
 
+% --- AFDM-EP 配置 (不变) ---
 cfgAfdm = EpConfig();
-cfgAfdm.TotalSubcarriers = numSc + maxDelay;
-cfgAfdm.MaxPathDelays    = maxDelay;
+cfgAfdm.ModulationOrder  = modOrder;
+cfgAfdm.BitsPerSymbol    = bps;
 cfgAfdm.MaxNormDoppler   = maxDopplerIdx;
 cfgAfdm.DopplerGuard     = dopplerGuard1;
 cfgAfdm.NumPaths         = defaultPaths;
 cfgAfdm.PilotSnr         = pilotSnrEp;
 cfgAfdm.WaveformType     = "AFDM";
-
-cfgOfdm = EpConfig();
-cfgOfdm.TotalSubcarriers = numSc + maxDelay;
-cfgOfdm.MaxPathDelays    = maxDelay;
-cfgOfdm.MaxNormDoppler   = maxDopplerIdx;
-cfgOfdm.DopplerGuard     = dopplerGuard1;
-cfgOfdm.NumPaths         = defaultPaths;
-cfgOfdm.PilotSnr         = pilotSnrEp;
-cfgOfdm.WaveformType     = "OFDM";
-
+cfgAfdm.MaxPathDelays    = maxDelay;
+cfgAfdm.TotalSubcarriers = numSc + maxDelay;   % 最后赋值, 触发 updateDerivedParams
 sysAfdm = EpSystem(cfgAfdm);
-sysOfdm = EpSystem(cfgOfdm);
 
-nTrials1      = 500;
-berAfdmVec    = zeros(numSnr, 1);
-berOfdmVec    = zeros(numSnr, 1);
-berPcsi1Vec   = zeros(numSnr, 1);
+% --- 标准 CP-OFDM 梳状导频基线 ---
+cfgOfdm = OfdmConfig();
+cfgOfdm.ModulationOrder  = modOrder;  % BitsPerSymbol 由 Dependent 属性自动派生
+cfgOfdm.MaxPathDelays    = maxDelay;
+cfgOfdm.NumPaths         = defaultPaths;
+cfgOfdm.MaxNormDoppler   = maxDopplerIdx;
+cfgOfdm.CpLength         = maxDelay;
+cfgOfdm.PilotSpacing     = floor(numSc / (maxDelay + 1));
+cfgOfdm.DftSize          = numSc;
+sysOfdm = OfdmSystem(cfgOfdm);
 
-fprintf('SNR   BER_AFDM    BER_OFDM    BER_PCSI\n');
+% 频谱效率对比
+seAfdm = cfgAfdm.NumActiveCarriers * bps / cfgAfdm.TotalSubcarriers;
+seOfdm = cfgOfdm.NumDataCarriers   * bps / cfgOfdm.TotalFrameLength;
+fprintf('  AFDM-EP SE: %.3f bps/Hz  (数据载波 %d / 帧长 %d)\n', ...
+    seAfdm, cfgAfdm.NumActiveCarriers, cfgAfdm.TotalSubcarriers);
+fprintf('  OFDM   SE: %.3f bps/Hz  (数据载波 %d / 帧长 %d, 导频 %d 个, 间距 %d)\n', ...
+    seOfdm, cfgOfdm.NumDataCarriers, cfgOfdm.TotalFrameLength, ...
+    cfgOfdm.NumPilots, cfgOfdm.PilotSpacing);
+fprintf('\n');
+
+nTrials1       = 10;
+berAfdmEstVec  = zeros(numSnr, 1);
+berAfdmPcsiVec = zeros(numSnr, 1);
+berOfdmEstVec  = zeros(numSnr, 1);
+berOfdmPcsiVec = zeros(numSnr, 1);
+
+fprintf('SNR   BER_AFDM_Est  BER_AFDM_PCSI  BER_OFDM_Est  BER_OFDM_PCSI\n');
 t1 = tic;
 
 for si = 1:numSnr
-    errA = 0; bitsA = 0;
-    errO = 0; bitsO = 0;
-    errP = 0; bitsP = 0;
+    errAE = 0; bitsAE = 0;
+    errAP = 0; bitsAP = 0;
+    errOE = 0; bitsOE = 0;
+    errOP = 0; bitsOP = 0;
 
     for tr = 1:nTrials1
         % 共享信道: 分数多普勒 (Jakes)
         [dl, dp, gn] = generateRandomChannel(defaultPaths, maxDelay, maxDopplerIdx, true);
 
-        rA = sysAfdm.runTrial(snrVec(si), dl, dp, gn);
-        rO = sysOfdm.runTrialPerfectCsi(snrVec(si), dl, dp, gn);
-        rP = sysAfdm.runTrialPerfectCsi(snrVec(si), dl, dp, gn);
+        rAE = sysAfdm.runTrial(snrVec(si), dl, dp, gn);
+        rAP = sysAfdm.runTrialPerfectCsi(snrVec(si), dl, dp, gn);
+        rOE = sysOfdm.runTrial(snrVec(si), dl, dp, gn);
+        rOP = sysOfdm.runTrialPerfectCsi(snrVec(si), dl, dp, gn);
 
-        errA  = errA  + rA.bitErrors;   bitsA = bitsA + rA.totalBits;
-        errO  = errO  + rO.bitErrors;   bitsO = bitsO + rO.totalBits;
-        errP  = errP  + rP.bitErrors;   bitsP = bitsP + rP.totalBits;
+        errAE = errAE + rAE.bitErrors;  bitsAE = bitsAE + rAE.totalBits;
+        errAP = errAP + rAP.bitErrors;  bitsAP = bitsAP + rAP.totalBits;
+        errOE = errOE + rOE.bitErrors;  bitsOE = bitsOE + rOE.totalBits;
+        errOP = errOP + rOP.bitErrors;  bitsOP = bitsOP + rOP.totalBits;
     end
 
-    berAfdmVec(si)  = berFloor(errA, bitsA);
-    berOfdmVec(si)  = berFloor(errO, bitsO);
-    berPcsi1Vec(si) = berFloor(errP, bitsP);
+    berAfdmEstVec(si)  = berFloor(errAE, bitsAE);
+    berAfdmPcsiVec(si) = berFloor(errAP, bitsAP);
+    berOfdmEstVec(si)  = berFloor(errOE, bitsOE);
+    berOfdmPcsiVec(si) = berFloor(errOP, bitsOP);
 
-    fprintf(' %2d   %.2e    %.2e    %.2e\n', ...
-        snrVec(si), berAfdmVec(si), berOfdmVec(si), berPcsi1Vec(si));
+    fprintf(' %2d   %.2e     %.2e      %.2e     %.2e\n', ...
+        snrVec(si), berAfdmEstVec(si), berAfdmPcsiVec(si), ...
+        berOfdmEstVec(si), berOfdmPcsiVec(si));
 end
 fprintf('Part 1 done (%.0f s)\n\n', toc(t1));
 
 % ---- Fig.1 ----
 fig1 = figure('Position', [80 80 560 420], 'Color', 'w');
-semilogy(snrVec, berOfdmVec, '-s', 'Color', cBlue, ...
+
+% OFDM 梳状导频 LS (实线圆圈, 蓝)
+semilogy(snrVec, berOfdmEstVec, '-o', 'Color', cBlue, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cBlue, ...
-    'DisplayName', 'OFDM-EP (Perfect CSI)');
+    'DisplayName', 'OFDM Comb-LS (Est. CSI)');
 hold on;
-semilogy(snrVec, berAfdmVec, '-^', 'Color', cRed, ...
+
+% OFDM 完美 CSI (虚线方块, 蓝)
+semilogy(snrVec, berOfdmPcsiVec, '--s', 'Color', cBlue, ...
+    'LineWidth', 1.5, 'MarkerSize', 6, ...
+    'DisplayName', 'OFDM (Perfect CSI)');
+
+% AFDM 估计 CSI (实线三角, 红)
+semilogy(snrVec, berAfdmEstVec, '-^', 'Color', cRed, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cRed, ...
-    'DisplayName', 'AFDM-EP (Estimated CSI)');
-semilogy(snrVec, berPcsi1Vec, '--o', 'Color', cBlack, ...
+    'DisplayName', 'AFDM-EP (Est. CSI)');
+
+% AFDM 完美 CSI (虚线菱形, 黑)
+semilogy(snrVec, berAfdmPcsiVec, '--d', 'Color', cBlack, ...
     'LineWidth', 1.5, 'MarkerSize', 6, ...
     'DisplayName', 'AFDM-EP (Perfect CSI)');
+
 hold off;
 applyIeeeStyle(gca);
 ylim([1e-5 1]);
@@ -142,12 +173,15 @@ fprintf('  Integer Doppler (fair to EP), same c1\n');
 dopplerGuard2 = 0;   % 整数多普勒不需要额外保护
 
 cfgEp2 = EpConfig();
-cfgEp2.TotalSubcarriers = numSc + maxDelay;
-cfgEp2.MaxPathDelays    = maxDelay;
+cfgEp2.ModulationOrder  = modOrder;
+cfgEp2.BitsPerSymbol    = bps;
 cfgEp2.MaxNormDoppler   = maxDopplerIdx;
 cfgEp2.DopplerGuard     = dopplerGuard2;
 cfgEp2.NumPaths         = defaultPaths;
 cfgEp2.PilotSnr         = pilotSnrEp;
+cfgEp2.WaveformType     = "AFDM";
+cfgEp2.MaxPathDelays    = maxDelay;
+cfgEp2.TotalSubcarriers = numSc + maxDelay;   % 最后赋值, 触发 updateDerivedParams
 sysEp2 = EpSystem(cfgEp2);
 
 cfgGf2 = GiFreeConfig();
@@ -654,17 +688,21 @@ end
 
 function detected = paperDetect(rxSig, numSc, c1, c2, amp, locStep, maxDelay, maxDop, thr)
 % paperDetect  论文固定门限路径检测 [Zhou et al. 2024, eq.(17)-(18)]
-    detected = zeros(0, 3);
+    maxPossible = (maxDelay + 1) * (2 * maxDop + 1);
+    buf   = zeros(maxPossible, 3);
+    count = 0;
     for l = 0:maxDelay
         for k = -maxDop:maxDop
             pos = mod(-(k + locStep*l), numSc);
             if abs(rxSig(pos+1)) >= thr
-                phase = exp(1j*2*pi*(c1*l^2 - c2*pos^2));
-                gain  = rxSig(pos+1) / (phase * amp);
-                detected(end+1, :) = [l, k, gain]; %#ok<AGROW>
+                phase        = exp(1j*2*pi*(c1*l^2 - c2*pos^2));
+                gain         = rxSig(pos+1) / (phase * amp);
+                count        = count + 1;
+                buf(count, :) = [l, k, gain];
             end
         end
     end
+    detected = buf(1:count, :);
 end
 
 function hEff = buildHeff(builder, pathParams)
@@ -704,16 +742,9 @@ function val = quickBer(rxSig, hEst, pilotFrame, regParam, numSc, dataPos, snrLi
 end
 
 function applyIeeeStyle(ax, fontSize)
-% applyIeeeStyle  IEEE 论文风格: Times New Roman, 合适字号, 紧凑布局
+% applyIeeeStyle  委托 PlotStyle.apply() 实现 IEEE 论文风格
 %   参考 GI-Free 论文 (2404.01088v1) Fig.5 配色和排版
     if nargin < 2, fontSize = 11; end
-    set(ax, ...
-        'FontName',   'Times New Roman', ...
-        'FontSize',   fontSize, ...
-        'LineWidth',  0.8, ...
-        'TickDir',    'in', ...
-        'TickLength', [0.015 0.015], ...
-        'Box',        'on');
-    grid(ax, 'on');
-    set(ax, 'GridAlpha', 0.3, 'MinorGridAlpha', 0.15);
+    ps = PlotStyle();
+    ps.apply(ax, fontSize);
 end
