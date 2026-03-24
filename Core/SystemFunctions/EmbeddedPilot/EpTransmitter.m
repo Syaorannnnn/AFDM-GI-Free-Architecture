@@ -37,7 +37,7 @@ classdef EpTransmitter < handle
             daftFrame(obj.Config.ActiveIndices) = qamSymbols;
 
             % IDAFT 变换到时域
-            if upper(obj.Config.WaveformType) == "AFDM"
+            if strcmpi(obj.Config.WaveformType, "AFDM")
                 timeFrame = AfdmTransforms.idaft(daftFrame, ...
                     obj.Config.ChirpParam1, obj.Config.ChirpParam2);
             else
@@ -56,7 +56,7 @@ classdef EpTransmitter < handle
             prefixLen = obj.Config.PrefixLength;
             N = obj.Config.NumDataSubcarriers;
 
-            if upper(obj.Config.WaveformType) == "AFDM"
+            if strcmpi(obj.Config.WaveformType, "AFDM")
                 phaseVec = exp(-1j * 2 * pi * obj.Config.ChirpParam1 * ...
                     (N ^ 2 + 2 * N * (-prefixLen:-1).'));
                 prefix = timeFrame(end - prefixLen + 1:end) .* phaseVec;
