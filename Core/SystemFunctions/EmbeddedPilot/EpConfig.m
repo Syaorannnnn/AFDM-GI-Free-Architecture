@@ -11,19 +11,19 @@ classdef EpConfig < handle
     % 导频方案: 仅支持单导频, DAFT 域索引 = ZP + 1
 
     properties (Access = public)
-        BitsPerSymbol      (1, 1) double = 2
-        ModulationOrder    (1, 1) double = 4
-        WaveformType       (1, 1) string = "AFDM"
+        BitsPerSymbol
+        ModulationOrder
+        WaveformType
 
-        TotalSubcarriers   (1, 1) double = 256
-        MaxPathDelays      (1, 1) double = 2
-        MaxNormDoppler     (1, 1) double = 2
-        DopplerGuard       (1, 1) double = 4
-        NumPaths           (1, 1) double = 3
+        TotalSubcarriers
+        MaxPathDelays
+        MaxNormDoppler
+        DopplerGuard
+        NumPaths
 
-        PilotSnr           (1, 1) double = 35
+        PilotSnr
 
-        ManualZeroPaddingLength (1, 1) double = 0
+        ManualZeroPaddingLength
     end
 
     properties (SetAccess = private)
@@ -41,10 +41,6 @@ classdef EpConfig < handle
     end
 
     methods
-
-        function obj = EpConfig()
-            obj.updateDerivedParams();
-        end
 
         function set.TotalSubcarriers(obj, val)
             obj.TotalSubcarriers = val; obj.updateDerivedParams();

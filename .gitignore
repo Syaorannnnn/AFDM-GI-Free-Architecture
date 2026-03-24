@@ -4,3 +4,6 @@
 *.png
 *.mat
 Results/
+variable_info.m
+CLAUDE.md
+.claude/

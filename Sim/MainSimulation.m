@@ -186,25 +186,25 @@ t2 = tic;
 
 for si = 1:nSnr2
     snrLin = 10^(snrVec2(si)/10);
-    eE = 0; bE = 0;
-    eG = 0; eP = 0; bG = 0;
+    errEp = 0; bitsEp = 0;
+    errGf = 0; errPcsi = 0; bitsGf = 0;
 
     for tr = 1:nTrials2
         % EP: 整数多普勒
         [dl, dp, gn] = generateRandomChannel(defaultPaths, maxDelay, maxDopplerIdx, false);
         rE = sysEp2.runTrial(snrVec2(si), dl, dp, gn);
-        eE = eE + rE.bitErrors;  bE = bE + rE.totalBits;
+        errEp = errEp + rE.bitErrors;  bitsEp = bitsEp + rE.totalBits;
 
         % GI-Free: 独立信道实现, 同统计参数
         rG = sysGf2.runTrial(snrLin, 1);
-        eG = eG + rG.bitErrorsSys;
-        eP = eP + rG.bitErrorsRef;
-        bG = bG + rG.totalBits;
+        errGf   = errGf   + rG.bitErrorsSys;
+        errPcsi = errPcsi + rG.bitErrorsRef;
+        bitsGf  = bitsGf  + rG.totalBits;
     end
 
-    berEp2(si)   = berFloor(eE, bE);
-    berGf2(si)   = berFloor(eG, bG);
-    berPcsi2(si) = berFloor(eP, bG);
+    berEp2(si)   = berFloor(errEp,   bitsEp);
+    berGf2(si)   = berFloor(errGf,   bitsGf);
+    berPcsi2(si) = berFloor(errPcsi, bitsGf);
 
     fprintf(' %2d   %.2e    %.2e    %.2e\n', snrVec2(si), berEp2(si), berGf2(si), berPcsi2(si));
 end
@@ -450,8 +450,8 @@ t3b = tic;
 
 for si = 1:numSnr
     snrLin = 10^(snrVec(si)/10);
-    eI = 0; eF = 0; eP = 0; totBits = 0;
-    accNI = 0; accNF = 0;
+    errInt = 0; errFrac = 0; errPcsi = 0; totBits = 0;
+    accNmseInt = 0; accNmseFrac = 0;
 
     for tr = 1:nTrials3b
         % 共享信号: 分数多普勒信道
@@ -475,16 +475,16 @@ for si = 1:numSnr
         [neF, ~] = biterr(txIdx, detF, bps);
         [neP, ~] = biterr(txIdx, detP, bps);
 
-        eI = eI + neI;  eF = eF + neF;  eP = eP + neP;
+        errInt  = errInt  + neI;  errFrac = errFrac + neF;  errPcsi = errPcsi + neP;
         totBits = totBits + nBits;
-        accNI = accNI + nmI;  accNF = accNF + nmF;
+        accNmseInt = accNmseInt + nmI;  accNmseFrac = accNmseFrac + nmF;
     end
 
-    berInt(si)    = berFloor(eI, totBits);
-    berFrac(si)   = berFloor(eF, totBits);
-    berPcsi3b(si) = berFloor(eP, totBits);
-    nmseInt(si)   = accNI / nTrials3b;
-    nmseFrac(si)  = accNF / nTrials3b;
+    berInt(si)    = berFloor(errInt,  totBits);
+    berFrac(si)   = berFloor(errFrac, totBits);
+    berPcsi3b(si) = berFloor(errPcsi, totBits);
+    nmseInt(si)   = accNmseInt  / nTrials3b;
+    nmseFrac(si)  = accNmseFrac / nTrials3b;
 
     fprintf(' %2d   %.2e    %.2e    %.2e    %+.1f      %+.1f\n', ...
         snrVec(si), berInt(si), berFrac(si), berPcsi3b(si), ...

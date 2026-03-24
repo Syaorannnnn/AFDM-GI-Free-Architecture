@@ -18,13 +18,13 @@ classdef EpReceiver < handle
     % 信道估计本身就是干净的, 无需迭代 SIC.
 
     properties (Access = public)
-        CsiMode      (1, 1) string = "Estimated"  % "Perfect" 或 "Estimated"
-        EqualizerType (1, 1) string = "MMSE"
+        CsiMode
+        EqualizerType
     end
 
     properties (Access = private)
         Config
-        currentPilotPower (1, 1) double = 1
+        CurrentPilotPower
     end
 
     methods (Access = public)
@@ -34,7 +34,7 @@ classdef EpReceiver < handle
         end
 
         function rxData = receive(obj, rxSignal, noisePower, physicalChannelMatrix, pilotPower)
-            obj.currentPilotPower = pilotPower;
+            obj.CurrentPilotPower = pilotPower;
 
             % 去 CPP 前缀
             rxNoPrefix = rxSignal(obj.Config.PrefixLength + 1:end);
@@ -64,7 +64,7 @@ classdef EpReceiver < handle
             %        计算其对所有子载波的贡献, 从接收信号中减去.
             % ======================================================
             pilotFrame = zeros(obj.Config.NumDataSubcarriers, 1);
-            pilotFrame(obj.Config.PilotIndex) = sqrt(obj.currentPilotPower);
+            pilotFrame(obj.Config.PilotIndex) = sqrt(obj.CurrentPilotPower);
             pilotContribution = hEff * pilotFrame;
             cleanDataSignal = daftRx - pilotContribution;
 
@@ -92,7 +92,7 @@ classdef EpReceiver < handle
 
             % 构造仅含导频的参考帧
             mockTxFrame = zeros(N, 1);
-            mockTxFrame(obj.Config.PilotIndex) = sqrt(obj.currentPilotPower);
+            mockTxFrame(obj.Config.PilotIndex) = sqrt(obj.CurrentPilotPower);
 
             % 预计算时域导频
             if upper(obj.Config.WaveformType) == "AFDM"
