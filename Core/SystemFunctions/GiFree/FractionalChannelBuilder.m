@@ -128,13 +128,13 @@ classdef FractionalChannelBuilder < handle
             %
             %   K = 1 时等价于 PilotAmplitude * buildPilotResponseVector(delay, doppler, 0)
 
-            cfg_     = obj.Config;
-            K        = cfg_.NumPilots;
-            positions = cfg_.PilotPositions;
-            sequence = cfg_.PilotSequence;
-            ampPP    = cfg_.PerPilotAmplitude;
+            localCfg = obj.Config;
+            K        = localCfg.NumPilots;
+            positions = localCfg.PilotPositions;
+            sequence = localCfg.PilotSequence;
+            ampPP    = localCfg.PerPilotAmplitude;
 
-            hComposite = zeros(cfg_.NumSubcarriers, 1);
+            hComposite = zeros(localCfg.NumSubcarriers, 1);
             for k = 1:K
                 hk = obj.buildPilotResponseVector(delay, doppler, positions(k));
                 hComposite = hComposite + ampPP * sequence(k) * hk;
@@ -143,17 +143,17 @@ classdef FractionalChannelBuilder < handle
 
         %% ---------- 随机信道实现 ----------
         function [pathParams, hEff] = generateChannel(obj)
-            cfg_      = obj.Config;
-            numPaths  = cfg_.NumPaths;
-            maxDelay  = cfg_.MaxDelaySpread;
-            maxDopIdx = cfg_.MaxDopplerIndex;
+            localCfg      = obj.Config;
+            numPaths  = localCfg.NumPaths;
+            maxDelay  = localCfg.MaxDelaySpread;
+            maxDopIdx = localCfg.MaxDopplerIndex;
 
             allDelays      = 0:maxDelay;
             selectedDelays = allDelays(randperm(length(allDelays), numPaths))';
             randomPhases   = -pi + 2 * pi * rand(numPaths, 1);
             dopplerShifts  = maxDopIdx * cos(randomPhases);
 
-            if ~cfg_.UseFractionalDoppler
+            if ~localCfg.UseFractionalDoppler
                 dopplerShifts = round(dopplerShifts);
             end
 
@@ -163,7 +163,7 @@ classdef FractionalChannelBuilder < handle
                         round(dopplerShifts(1:p-1)) == round(dopplerShifts(p)))
                     randomPhases(p)  = -pi + 2 * pi * rand();
                     dopplerShifts(p) = maxDopIdx * cos(randomPhases(p));
-                    if ~cfg_.UseFractionalDoppler
+                    if ~localCfg.UseFractionalDoppler
                         dopplerShifts(p) = round(dopplerShifts(p));
                     end
                     attempts = attempts + 1;
