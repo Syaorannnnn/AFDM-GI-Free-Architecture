@@ -1,4 +1,5 @@
 classdef AfdmTransforms
+% AfdmTransforms: 提供 DAFT/IDAFT 与等效信道矩阵构造工具。
     % AfdmTransforms: AFDM 核心变换工具类
     % 近期改动：
     %   1. generateEffectiveChannelMatrix 中消除 dftmtx 和 diag:
@@ -10,6 +11,7 @@ classdef AfdmTransforms
     methods (Static)
         %% DAFT / IDAFT
 
+        % daft: 执行 DAFT 变换。
         function demodulatedSignal = daft(inputSignal, chirpParam1, chirpParam2)
             signalLength = size(inputSignal, 1);
             timeVector = (0:signalLength - 1).';
@@ -22,6 +24,7 @@ classdef AfdmTransforms
             demodulatedSignal = tempSignal .* chirpVector2;
         end
 
+        % idaft: 执行 IDAFT 逆变换。
         function timeDomainSignal = idaft(inputSignal, chirpParam1, chirpParam2)
             signalLength = size(inputSignal, 1);
             timeVector = (0:signalLength - 1).';
@@ -35,11 +38,13 @@ classdef AfdmTransforms
 
         %% DFT / IDFT
 
+        % dft: 执行归一化 DFT。
         function outputSignal = dft(inputSignal)
             signalLength = size(inputSignal, 1);
             outputSignal = fft(inputSignal) ./ sqrt(signalLength);
         end
 
+        % idft: 执行归一化 IDFT。
         function outputSignal = idft(inputSignal)
             signalLength = size(inputSignal, 1);
             outputSignal = ifft(inputSignal) .* sqrt(signalLength);
@@ -47,6 +52,7 @@ classdef AfdmTransforms
 
         %% 等效信道矩阵
 
+        % generateEffectiveChannelMatrix: 构造 DAFT/DFT 域等效信道矩阵。
         function effectiveChannelMatrix = generateEffectiveChannelMatrix(physicalChannelMatrix, configParams)
             % generateEffectiveChannelMatrix - 优化版
             %
@@ -121,3 +127,4 @@ classdef AfdmTransforms
     end
 
 end
+

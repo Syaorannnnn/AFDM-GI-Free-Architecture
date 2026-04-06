@@ -1,18 +1,26 @@
-%% MainSimulation.m
+%% MAINSIMULATION - AFDM 全流程仿真主脚本（论文图复现）
 %
-%  叙事主线: AFDM 能否同时实现高频谱效率和高可靠性?
+% 描述:
+% 本脚本统一生成 AFDM 系统核心对比图，覆盖以下实验部分：
+% Part 1: AFDM vs OFDM（双色散信道）
+% Part 2: CFAR 自适应门限 vs 固定门限
+% Part 3: 分数 Doppler 场景下 EP / GI-Free 对比
 %
-%  Part 1 — AFDM vs OFDM (分数多普勒, 各自原生导频方案公平对比)
-%  Part 2 — EP vs GI-Free (整数多普勒, 频谱效率对比)
-%  Part 3a — CFAR 自适应门限 vs 论文固定门限 (路径数不确定)
-%  Part 3b — 分数多普勒: 整数接收机 vs 分数接收机 (error floor)
-%  Part 4 — Agile-c2 PAPR CCDF (完整收发链路)
+% 依赖项:
+% - MATLAB R2023b 或更高版本
+% - Communications Toolbox
+% - 仓库根目录已 addpath(genpath("./"))
 %
-%  配色方案 (对齐 GI-Free 论文 2404.01088 Fig.5 风格):
-%    蓝色实线圆圈  — 基线/论文方法
-%    红色实线三角  — 本文方法
-%    黑色虚线方块  — 理想参考 (Perfect CSI / 理想值)
-%    紫色虚线方块  — 论文迭代 (仅 Part 3a)
+% 如何运行:
+% 1) 在 MATLAB 中将工作目录切换到仓库根目录。
+% 2) 执行 MainSimulation。
+%
+% 输出:
+% - 图文件: Sim/Results/Figures/*.fig
+% - 日志:   Sim/Results/Logs/MainSimulation_*.txt
+%
+% 版本历史:
+% 2026-04-01 - Aiden - 注释规范化。
 
 clear; close all; clc;
 addpath(genpath("./"));
@@ -21,29 +29,35 @@ fprintf('============================================================\n');
 fprintf('     AFDM Full-Pipeline Simulation (Paper Figures)\n');
 fprintf('============================================================\n\n');
 
-% --- 确保输出目录存在 ---
-if ~isfolder('./Sim/Results')
-    mkdir('./Sim/Results');
-end
+simDir     = fileparts(mfilename('fullpath'));
+figuresDir = fullfile(simDir, 'Results', 'Figures');
+logsDir    = fullfile(simDir, 'Results', 'Logs');
+if ~isfolder(figuresDir), mkdir(figuresDir); end
+if ~isfolder(logsDir),    mkdir(logsDir);    end
+
+% 日志镜像到 Logs，文件名附时间戳以保留历史记录。
+simLogPath = fullfile(logsDir, sprintf('MainSimulation_%s.txt', ...
+    char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'))));
+diary(simLogPath);
 
 %% ==================== 公共参数 ====================
 numSc           = 512;      % DAFT 域子载波数
 modOrder        = 4;        % QPSK
 bps             = log2(modOrder);
-maxDelay        = 4;        % 最大时延扩展 (支持最多 5 条路径)
-maxDopplerIdx   = 2;        % 最大多普勒指数
+maxDelay        = 4;        % 最大时延扩展样本数
+maxDopplerIdx   = 2;        % 最大 Doppler 索引
 defaultPaths    = 3;        % 默认路径数
 pilotSnrEp      = 35;       % EP 导频 SNR (dB)
 pilotSnrGf      = 45;       % GI-Free 导频 SNR (dB)
 
-% 全局 SNR 扫描
+% 全局 SNR 扫描区间
 snrVec = 0:5:20;
 numSnr = numel(snrVec);
 
-%% ==================== 配色/标记/样式====================
-% 蓝圈=EP/论文, 红三角=GI-Free/本文, 黑虚方=理想
+%% ==================== 配色/标记/样式 ====================
+% 蓝色=基线/EP，红色=GI-Free，黑色虚线=理想参考，紫色=论文迭代
 cBlue   = [0.00 0.45 0.74];    % 基线
-cRed    = [0.85 0.33 0.10];    % 本文方法
+cRed    = [0.85 0.33 0.10];    % GI-Free
 cBlack  = [0.00 0.00 0.00];    % 理想参考
 cPurple = [0.49 0.18 0.56];    % 论文迭代
 
@@ -56,25 +70,25 @@ fprintf('  OFDM: 梳状导频 LS + DFT 插值 + 单抽头 MMSE (标准基线)\n\
 
 dopplerGuard1 = 4;
 
-% --- AFDM-EP 配置 (不变) ---
+% AFDM-EP 配置
 cfgAfdm = EpConfig();
 cfgAfdm.ModulationOrder  = modOrder;
 cfgAfdm.BitsPerSymbol    = bps;
-cfgAfdm.MaxNormDoppler   = maxDopplerIdx;
+cfgAfdm.MaxDopplerIdx   = maxDopplerIdx;
 cfgAfdm.DopplerGuard     = dopplerGuard1;
 cfgAfdm.NumPaths         = defaultPaths;
-cfgAfdm.PilotSnr         = pilotSnrEp;
+cfgAfdm.PilotSnrDb         = pilotSnrEp;
 cfgAfdm.WaveformType     = "AFDM";
-cfgAfdm.MaxPathDelays    = maxDelay;
-cfgAfdm.TotalSubcarriers = numSc + maxDelay;   % 最后赋值, 触发 updateDerivedParams
+cfgAfdm.MaxDelaySamples    = maxDelay;
+cfgAfdm.TotalSubcarriers = numSc + maxDelay;   % 最后赋值触发 updateDerivedParams
 sysAfdm = EpSystem(cfgAfdm);
 
-% --- 标准 CP-OFDM 梳状导频基线 ---
+% 标准 CP-OFDM 梳状导频基线
 cfgOfdm = OfdmConfig();
 cfgOfdm.ModulationOrder  = modOrder;  % BitsPerSymbol 由 Dependent 属性自动派生
-cfgOfdm.MaxPathDelays    = maxDelay;
+cfgOfdm.MaxDelaySamples  = maxDelay;
 cfgOfdm.NumPaths         = defaultPaths;
-cfgOfdm.MaxNormDoppler   = maxDopplerIdx;
+cfgOfdm.MaxDopplerIdx   = maxDopplerIdx;
 cfgOfdm.CpLength         = maxDelay;
 cfgOfdm.PilotSpacing     = floor(numSc / (maxDelay + 1));
 cfgOfdm.DftSize          = numSc;
@@ -85,12 +99,12 @@ seAfdm = cfgAfdm.NumActiveCarriers * bps / cfgAfdm.TotalSubcarriers;
 seOfdm = cfgOfdm.NumDataCarriers   * bps / cfgOfdm.TotalFrameLength;
 fprintf('  AFDM-EP SE: %.3f bps/Hz  (数据载波 %d / 帧长 %d)\n', ...
     seAfdm, cfgAfdm.NumActiveCarriers, cfgAfdm.TotalSubcarriers);
-fprintf('  OFDM   SE: %.3f bps/Hz  (数据载波 %d / 帧长 %d, 导频 %d 个, 间距 %d)\n', ...
+fprintf('  OFDM   SE: %.3f bps/Hz  (数据载波 %d / 帧长 %d, 导频 %d 个, 间隔 %d)\n', ...
     seOfdm, cfgOfdm.NumDataCarriers, cfgOfdm.TotalFrameLength, ...
     cfgOfdm.NumPilots, cfgOfdm.PilotSpacing);
 fprintf('\n');
 
-nTrials1       = 10;
+nTrials1       = 1e2;
 berAfdmEstVec  = zeros(numSnr, 1);
 berAfdmPcsiVec = zeros(numSnr, 1);
 berOfdmEstVec  = zeros(numSnr, 1);
@@ -106,7 +120,7 @@ for si = 1:numSnr
     errOP = 0; bitsOP = 0;
 
     for tr = 1:nTrials1
-        % 共享信道: 分数多普勒 (Jakes)
+        % 共享信道：分数 Doppler (Jakes)
         [dl, dp, gn] = generateRandomChannel(defaultPaths, maxDelay, maxDopplerIdx, true);
 
         rAE = sysAfdm.runTrial(snrVec(si), dl, dp, gn);
@@ -134,23 +148,23 @@ fprintf('Part 1 done (%.0f s)\n\n', toc(t1));
 % ---- Fig.1 ----
 fig1 = figure('Position', [80 80 560 420], 'Color', 'w');
 
-% OFDM 梳状导频 LS (实线圆圈, 蓝)
+% OFDM 梳状导频 LS（蓝色实线圆圈）
 semilogy(snrVec, berOfdmEstVec, '-o', 'Color', cBlue, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cBlue, ...
     'DisplayName', 'OFDM Comb-LS (Est. CSI)');
 hold on;
 
-% OFDM 完美 CSI (虚线方块, 蓝)
+% OFDM Perfect CSI（蓝色虚线方块）
 semilogy(snrVec, berOfdmPcsiVec, '--s', 'Color', cBlue, ...
     'LineWidth', 1.5, 'MarkerSize', 6, ...
     'DisplayName', 'OFDM (Perfect CSI)');
 
-% AFDM 估计 CSI (实线三角, 红)
+% AFDM 浼拌 CSI (瀹炵嚎涓夎, 绾?
 semilogy(snrVec, berAfdmEstVec, '-^', 'Color', cRed, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cRed, ...
     'DisplayName', 'AFDM-EP (Est. CSI)');
 
-% AFDM 完美 CSI (虚线菱形, 黑)
+% AFDM Perfect CSI（黑色虚线菱形）
 semilogy(snrVec, berAfdmPcsiVec, '--d', 'Color', cBlack, ...
     'LineWidth', 1.5, 'MarkerSize', 6, ...
     'DisplayName', 'AFDM-EP (Perfect CSI)');
@@ -162,121 +176,20 @@ xlabel('Data SNR (dB)');
 ylabel('BER');
 title(sprintf('Fig.1: AFDM vs OFDM  N=%d P=%d Fractional Doppler', numSc, defaultPaths));
 legend('Location', 'southwest');
-savefig(fig1, './Sim/Results/Fig1_AfdmVsOfdm.fig');
+savefig(fig1, fullfile(figuresDir, 'Fig1_AfdmVsOfdm.fig'));
 
 %% ################################################################
-%  Part 2: EP vs GI-Free
+%  Part 2: CFAR 自适应门限 vs 论文固定门限
 %  ################################################################
-fprintf('==================== Part 2: EP vs GI-Free ====================\n');
-fprintf('  Integer Doppler (fair to EP), same c1\n');
-
-dopplerGuard2 = 0;   % 整数多普勒不需要额外保护
-
-cfgEp2 = EpConfig();
-cfgEp2.ModulationOrder  = modOrder;
-cfgEp2.BitsPerSymbol    = bps;
-cfgEp2.MaxNormDoppler   = maxDopplerIdx;
-cfgEp2.DopplerGuard     = dopplerGuard2;
-cfgEp2.NumPaths         = defaultPaths;
-cfgEp2.PilotSnr         = pilotSnrEp;
-cfgEp2.WaveformType     = "AFDM";
-cfgEp2.MaxPathDelays    = maxDelay;
-cfgEp2.TotalSubcarriers = numSc + maxDelay;   % 最后赋值, 触发 updateDerivedParams
-sysEp2 = EpSystem(cfgEp2);
-
-cfgGf2 = GiFreeConfig();
-cfgGf2.NumSubcarriers       = numSc;
-cfgGf2.ModulationOrder      = modOrder;
-cfgGf2.MaxDelaySpread       = maxDelay;
-cfgGf2.MaxDopplerIndex      = maxDopplerIdx;
-cfgGf2.NumPaths             = defaultPaths;
-cfgGf2.DopplerGuard         = dopplerGuard2;
-cfgGf2.SpreadWidth          = 0;
-cfgGf2.PilotSnrDb           = pilotSnrGf;
-cfgGf2.MaxSicIterations     = 10;
-cfgGf2.NumPathsUpper        = 6;
-cfgGf2.UseFractionalDoppler = false;
-sysGf2 = GiFreeSystem(cfgGf2);
-
-seEp = cfgEp2.NumActiveCarriers * bps / cfgEp2.NumDataSubcarriers;
-seGf = cfgGf2.NumDataSymbols    * bps / numSc;
-fprintf('  EP:      %d data / %d sc -> SE = %.3f bits/s/Hz\n', ...
-    cfgEp2.NumActiveCarriers, cfgEp2.NumDataSubcarriers, seEp);
-fprintf('  GI-Free: %d data / %d sc -> SE = %.3f bits/s/Hz\n', ...
-    cfgGf2.NumDataSymbols, numSc, seGf);
-fprintf('  SE gain: %.1f%%\n\n', (seGf/seEp - 1)*100);
-
-% Part 2: 独立 SNR 范围 (避免高 SNR 下 PDR 崩塌)
-snrVec2  = 0:2:20;
-nSnr2    = numel(snrVec2);
-nTrials2 = 1e3;
-
-berEp2   = zeros(nSnr2, 1);
-berGf2   = zeros(nSnr2, 1);
-berPcsi2 = zeros(nSnr2, 1);
-
-fprintf('SNR   BER_EP      BER_GF      BER_PCSI\n');
-t2 = tic;
-
-for si = 1:nSnr2
-    snrLin = 10^(snrVec2(si)/10);
-    errEp = 0; bitsEp = 0;
-    errGf = 0; errPcsi = 0; bitsGf = 0;
-
-    for tr = 1:nTrials2
-        % EP: 整数多普勒
-        [dl, dp, gn] = generateRandomChannel(defaultPaths, maxDelay, maxDopplerIdx, false);
-        rE = sysEp2.runTrial(snrVec2(si), dl, dp, gn);
-        errEp = errEp + rE.bitErrors;  bitsEp = bitsEp + rE.totalBits;
-
-        % GI-Free: 独立信道实现, 同统计参数
-        rG = sysGf2.runTrial(snrLin, 1);
-        errGf   = errGf   + rG.bitErrorsSys;
-        errPcsi = errPcsi + rG.bitErrorsRef;
-        bitsGf  = bitsGf  + rG.totalBits;
-    end
-
-    berEp2(si)   = berFloor(errEp,   bitsEp);
-    berGf2(si)   = berFloor(errGf,   bitsGf);
-    berPcsi2(si) = berFloor(errPcsi, bitsGf);
-
-    fprintf(' %2d   %.2e    %.2e    %.2e\n', snrVec2(si), berEp2(si), berGf2(si), berPcsi2(si));
-end
-fprintf('Part 2 done (%.0f s)\n\n', toc(t2));
-
-% ---- Fig.2 ----
-fig2 = figure('Position', [100 100 560 420], 'Color', 'w');
-semilogy(snrVec2, berEp2, '-o', 'Color', cBlue, ...
-    'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cBlue, ...
-    'DisplayName', sprintf('EP (\\eta=%.2f, %d data)', seEp, cfgEp2.NumActiveCarriers));
-hold on;
-semilogy(snrVec2, berGf2, '-^', 'Color', cRed, ...
-    'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cRed, ...
-    'DisplayName', sprintf('GI-Free (\\eta=%.2f, %d data)', seGf, cfgGf2.NumDataSymbols));
-semilogy(snrVec2, berPcsi2, '--s', 'Color', cBlack, ...
-    'LineWidth', 1.5, 'MarkerSize', 6, ...
-    'DisplayName', 'Perfect CSI');
-hold off;
-applyIeeeStyle(gca);
-ylim([1e-5 1]);
-xlabel('Data SNR (dB)');
-ylabel('BER');
-title(sprintf('Fig.2: EP vs GI-Free  N=%d P=%d Integer Doppler', numSc, defaultPaths));
-legend('Location', 'southwest');
-savefig(fig2, './Sim/Results/Fig2_EpVsGiFree.fig');
-
-%% ################################################################
-%  Part 3a: CFAR 门限 vs 论文固定门限
-%  ################################################################
-fprintf('==================== Part 3a: CFAR Threshold Benchmark ====================\n');
+fprintf('==================== Part 2: CFAR Threshold Benchmark ====================\n');
 
 dopplerGuard3 = 4;
 
 cfgGf3a = GiFreeConfig();
 cfgGf3a.NumSubcarriers       = numSc;
 cfgGf3a.ModulationOrder      = modOrder;
-cfgGf3a.MaxDelaySpread       = maxDelay;
-cfgGf3a.MaxDopplerIndex      = maxDopplerIdx;
+cfgGf3a.MaxDelaySamples       = maxDelay;
+cfgGf3a.MaxDopplerIdx      = maxDopplerIdx;
 cfgGf3a.NumPaths             = 5;
 cfgGf3a.DopplerGuard         = dopplerGuard3;
 cfgGf3a.SpreadWidth          = 0;
@@ -291,7 +204,7 @@ pilotAmp  = cfgGf3a.PilotAmplitude;
 c1Val     = cfgGf3a.ChirpParam1;
 c2Val     = cfgGf3a.ChirpParam2;
 locStep   = cfgGf3a.LocStep;
-dataPos   = cfgGf3a.DataPositions + 1;   % 1-based
+dataPos   = cfgGf3a.DataPos1;   % 1-based
 nData3a   = cfgGf3a.NumDataSymbols;
 
 pilotFrame3a    = zeros(numSc, 1);
@@ -305,7 +218,7 @@ lmmseReg   = 1 / snrLin3;
 nTrials3a  = 300;
 pathCounts = 1:5;
 
-% 统计量: [5 x 3] (论文首检, 论文迭代, CFAR)
+% 统计量 [5 x 3]（论文首检、论文迭代、CFAR）
 avgDet  = zeros(5,3);  avgPd   = zeros(5,3);
 avgFa   = zeros(5,3);  avgNmse = zeros(5,3);
 avgBer  = zeros(5,3);
@@ -322,7 +235,7 @@ for gi = 1:5
     for tr = 1:nTrials3a
         % ---- 生成共享信号 ----
         [txFrame, txIdx] = sysGf3a.Transmitter.transmit(snrLin3);
-        [trueParams, trueH] = sysGf3a.ChannelBuilder.generateChannel();
+        [trueParams, trueH] = sysGf3a.ChannelSampler.sampleChannel();
         nTrue = size(trueParams, 1);
         noise = sqrt(0.5) * (randn(numSc,1) + 1j*randn(numSc,1));
         rxSig = trueH * txFrame + noise;
@@ -359,7 +272,7 @@ for gi = 1:5
         nB = norm(full(hB-trueH),'fro')^2/trueNorm;
         nC = norm(full(hC-trueH),'fro')^2/trueNorm;
 
-        % BER (三种统一 LMMSE 检测, 隔离门限贡献)
+        % BER（三种方法统一使用 LMMSE 检测，隔离门限贡献）
         bA = quickBer(rxSig, hA, pilotFrame3a, lmmseReg, numSc, dataPos, snrLin3, modOrder, txIdx);
         bB = quickBer(rxSig, hB, pilotFrame3a, lmmseReg, numSc, dataPos, snrLin3, modOrder, txIdx);
         bC = quickBer(rxSig, hC, pilotFrame3a, lmmseReg, numSc, dataPos, snrLin3, modOrder, txIdx);
@@ -381,9 +294,9 @@ for gi = 1:5
     fprintf('  P=%d: Pd=[%.0f%% %.0f%% %.0f%%]  NMSE=[%+.1f %+.1f %+.1f]dB  BER=[%.4f %.4f %.4f]\n', ...
         nP, avgPd(gi,:)*100, 10*log10(avgNmse(gi,:)+1e-20), avgBer(gi,:));
 end
-fprintf('Part 3a done (%.0f s)\n\n', toc(t3a));
+fprintf('Part 2 done (%.0f s)\n\n', toc(t3a));
 
-% ---- Fig.3: 四子图 ----
+% ---- Fig.2: 四子图 ----
 legLbl  = {'Paper (first)', 'Paper (iter)', 'OMP+CFAR'};
 pltClr  = {cBlue, cPurple, cRed};
 pltMkr  = {'o', 's', '^'};
@@ -391,7 +304,7 @@ pltLine = {'-', '--', '-'};
 
 fig3 = figure('Position', [60 60 1200 380], 'Color', 'w');
 
-% (a) 检出数
+% (a) 检测数
 subplot(1,4,1); hold on; grid on; box on;
 for mi = 1:3
     plot(pathCounts, avgDet(:,mi), [pltLine{mi} pltMkr{mi}], ...
@@ -437,66 +350,142 @@ applyIeeeStyle(gca, 9);
 ylabel('BER'); xlabel('P');
 title('(d) BER');
 
-sgtitle(sprintf('Fig.3: CFAR Threshold Comparison  N=%d  DataSNR=%ddB  PilotSNR=%ddB', ...
+sgtitle(sprintf('Fig.2: CFAR Threshold Comparison  N=%d  DataSNR=%ddB  PilotSNR=%ddB', ...
     numSc, snrDb3, pilotSnrGf), 'FontSize', 12, 'FontName', 'Times New Roman');
-savefig(fig3, './Sim/Results/Fig3_CfarThreshold.fig');
+savefig(fig3, fullfile(figuresDir, 'Fig2_CfarThreshold.fig'));
 
 %% ################################################################
-%  Part 3b: 分数多普勒 — 整数接收机 vs 分数接收机
+%  Part 3: 分数 Doppler：EP 保护开销 vs GI-Free 对比
 %  ################################################################
-fprintf('==================== Part 3b: Fractional Doppler ====================\n');
+fprintf('==================== Part 3: Fractional Doppler Focus ====================\n');
 
 cfgInt = GiFreeConfig();
 cfgInt.NumSubcarriers       = numSc;
 cfgInt.ModulationOrder      = modOrder;
-cfgInt.MaxDelaySpread       = maxDelay;
-cfgInt.MaxDopplerIndex      = maxDopplerIdx;
+cfgInt.MaxDelaySamples       = maxDelay;
+cfgInt.MaxDopplerIdx      = maxDopplerIdx;
 cfgInt.NumPaths             = defaultPaths;
 cfgInt.DopplerGuard         = dopplerGuard3;
-cfgInt.SpreadWidth          = 0;        % 不建模 Dirichlet 扩展
+cfgInt.SpreadWidth          = 0;        % 涓嶅缓妯?Dirichlet 鎵╁睍
 cfgInt.PilotSnrDb           = pilotSnrGf;
 cfgInt.MaxSicIterations     = 10;
 cfgInt.NumPathsUpper        = 6;
-cfgInt.UseFractionalDoppler = true;      % 信道始终为分数多普勒
+cfgInt.UseFractionalDoppler = true;      % 信道始终为分数 Doppler
+cfgInt.UseDynamicPilot      = true;
+cfgInt.DynamicPilotBaseDb   = 35;
+cfgInt.EnableProgressiveCfar = false;
+cfgInt.EnablePathStabilityGate = false;
 sysInt = GiFreeSystem(cfgInt);
+
+cfgFracBase = GiFreeConfig();
+cfgFracBase.NumSubcarriers       = numSc;
+cfgFracBase.ModulationOrder      = modOrder;
+cfgFracBase.MaxDelaySamples      = maxDelay;
+cfgFracBase.MaxDopplerIdx        = maxDopplerIdx;
+cfgFracBase.NumPaths             = defaultPaths;
+cfgFracBase.DopplerGuard         = dopplerGuard3;
+cfgFracBase.SpreadWidth          = 4;       % 原始分数 Doppler 接收机
+cfgFracBase.PilotSnrDb           = pilotSnrGf;
+cfgFracBase.MaxSicIterations     = 10;
+cfgFracBase.NumPathsUpper        = 6;
+cfgFracBase.UseFractionalDoppler = true;
+cfgFracBase.UseDynamicPilot      = false;
+cfgFracBase.EnableProgressiveCfar = false;
+cfgFracBase.EnablePathStabilityGate = false;
+sysFracBase = GiFreeSystem(cfgFracBase);
 
 cfgFrac = GiFreeConfig();
 cfgFrac.NumSubcarriers       = numSc;
 cfgFrac.ModulationOrder      = modOrder;
-cfgFrac.MaxDelaySpread       = maxDelay;
-cfgFrac.MaxDopplerIndex      = maxDopplerIdx;
+cfgFrac.MaxDelaySamples      = maxDelay;
+cfgFrac.MaxDopplerIdx        = maxDopplerIdx;
 cfgFrac.NumPaths             = defaultPaths;
 cfgFrac.DopplerGuard         = dopplerGuard3;
-cfgFrac.SpreadWidth          = 4;       % Dirichlet 核建模 + 割线法精炼
+cfgFrac.SpreadWidth          = 4;       % Dirichlet 核建模 + T1P 接收机优化
 cfgFrac.PilotSnrDb           = pilotSnrGf;
 cfgFrac.MaxSicIterations     = 10;
 cfgFrac.NumPathsUpper        = 6;
 cfgFrac.UseFractionalDoppler = true;
+cfgFrac.UseDynamicPilot          = true;
+cfgFrac.DynamicPilotBaseDb       = 35;
+cfgFrac.EnableProgressiveCfar    = true;
+cfgFrac.ProgressiveCfarInitScale = 3.0;
+cfgFrac.ProgressiveCfarFinalScale = 1.0;
+cfgFrac.EnablePathStabilityGate  = true;
+cfgFrac.PathStabilityThreshold   = 2;
 sysFrac = GiFreeSystem(cfgFrac);
 
-nTrials3b = 80;
-berInt  = zeros(numSnr,1);  berFrac  = zeros(numSnr,1);
-berPcsi3b = zeros(numSnr,1);
-nmseInt = zeros(numSnr,1);  nmseFrac = zeros(numSnr,1);
+% ---- EP 基准线：分数 Doppler 下不同保护带 ----
+xiNuVec = [1, 2, 4];
+nXiNu   = numel(xiNuVec);
+sysEp3b = cell(nXiNu, 1);
+seEp3b  = zeros(nXiNu, 1);
 
-fprintf('SNR   BER_Int     BER_Frac    BER_PCSI    NMSE_Int   NMSE_Frac\n');
+for xi = 1:nXiNu
+    cfgEp = EpConfig();
+    cfgEp.ModulationOrder  = modOrder;
+    cfgEp.BitsPerSymbol    = bps;
+    cfgEp.MaxDopplerIdx   = maxDopplerIdx;
+    cfgEp.DopplerGuard     = xiNuVec(xi);
+    cfgEp.NumPaths         = defaultPaths;
+    cfgEp.PilotSnrDb         = pilotSnrEp;
+    cfgEp.WaveformType     = "AFDM";
+    cfgEp.MaxDelaySamples    = maxDelay;
+    cfgEp.TotalSubcarriers = numSc + maxDelay;
+    sysEp3b{xi} = EpSystem(cfgEp);
+    seEp3b(xi)  = cfgEp.NumActiveCarriers * bps / cfgEp.NumDataSubcarriers;
+end
+
+nTrials3b = 80;
+berInt  = zeros(numSnr,1);  berFracBase  = zeros(numSnr,1);  berFrac  = zeros(numSnr,1);
+berPcsi3b = zeros(numSnr,1);
+nmseInt = zeros(numSnr,1);  nmseFracBase = zeros(numSnr,1);  nmseFrac = zeros(numSnr,1);
+berEp3b = zeros(numSnr, nXiNu);
+
+seGfInt  = cfgInt.NumDataSymbols * bps / numSc;
+seGfFracBase = cfgFracBase.NumDataSymbols * bps / numSc;
+seGfFrac = cfgFrac.NumDataSymbols * bps / numSc;
+for xi = 1:nXiNu
+    cfg = sysEp3b{xi}.Config;
+    fprintf('  EP xi_nu=%d: %d data / %d sc -> SE = %.3f bits/s/Hz  (Q=%d)\n', ...
+        xiNuVec(xi), cfg.NumActiveCarriers, cfg.NumDataSubcarriers, seEp3b(xi), ...
+        cfg.ZeroPaddingLength * 2 + 1);
+end
+fprintf('  GI-Free Base: %d data / %d sc -> SE = %.3f bits/s/Hz\n', ...
+    cfgFracBase.NumDataSymbols, numSc, seGfFracBase);
+fprintf('  GI-Free T1P:  %d data / %d sc -> SE = %.3f bits/s/Hz\n', ...
+    cfgFrac.NumDataSymbols, numSc, seGfFrac);
+fprintf('\n');
+
+fprintf(['SNR   BER_Int     BER_Base    BER_T1P     BER_PCSI    ', ...
+         'NMSE_Int   NMSE_Base  NMSE_T1P   BER_EP1    BER_EP2    BER_EP4\n']);
 t3b = tic;
 
 for si = 1:numSnr
     snrLin = 10^(snrVec(si)/10);
-    errInt = 0; errFrac = 0; errPcsi = 0; totBits = 0;
-    accNmseInt = 0; accNmseFrac = 0;
+    errInt = 0; errFracBase = 0; errFrac = 0; errPcsi = 0; totBits = 0;
+    accNmseInt = 0; accNmseFracBase = 0; accNmseFrac = 0;
+    errEp3b = zeros(1, nXiNu); bitsEp3b = zeros(1, nXiNu);
 
     for tr = 1:nTrials3b
-        % 共享信号: 分数多普勒信道
-        [txFrame, txIdx] = sysFrac.Transmitter.transmit(snrLin);
-        [~, trueH] = sysFrac.ChannelBuilder.generateChannel();
+        % 共享信号：分数 Doppler 信道，T1P 与旧版 FracRx 共用同一组数据索引。
+        trialRngState = rng;
+        [txFrame, txIdx] = transmitWithFixedSeed(sysFrac, snrLin, trialRngState);
+        [txFrameBase, txIdxBase] = transmitWithFixedSeed(sysFracBase, snrLin, trialRngState);
+        if cfgInt.UseDynamicPilot
+            cfgInt.CurrentDataSnrLin = snrLin;
+        end
+        [~, trueH] = sysFrac.ChannelSampler.sampleChannel();
         noise = sqrt(0.5) * (randn(numSc,1) + 1j*randn(numSc,1));
         rxSig = trueH * txFrame + noise;
+        rxSigBase = trueH * txFrameBase + noise;
         nBits = numel(txIdx) * bps;
 
         % 整数接收机
         [detI, nmI, ~] = sysInt.Receiver.receive(rxSig, trueH, snrLin, 1);
+
+        % 旧版分数接收机
+        [detB, nmB, ~] = sysFracBase.Receiver.receive(rxSigBase, trueH, snrLin, 1);
 
         % 分数接收机
         [detF, nmF, ~] = sysFrac.Receiver.receive(rxSig, trueH, snrLin, 1);
@@ -504,38 +493,77 @@ for si = 1:numSnr
         % Perfect CSI
         detP = GiFreeSystem.perfectCsiDetect(rxSig, trueH, snrLin, 1, cfgFrac);
 
-        % BER 统计 (使用 biterr)
+        % EP 基准线（独立信道实现，同统计参数）
+        [dlEp, dpEp, gnEp] = generateRandomChannel(defaultPaths, maxDelay, maxDopplerIdx, true);
+        for xi = 1:nXiNu
+            rEp = sysEp3b{xi}.runTrial(snrVec(si), dlEp, dpEp, gnEp);
+            errEp3b(xi)  = errEp3b(xi)  + rEp.bitErrors;
+            bitsEp3b(xi) = bitsEp3b(xi) + rEp.totalBits;
+        end
+
+        % BER 统计（使用 biterr）
         [neI, ~] = biterr(txIdx, detI, bps);
+        [neB, ~] = biterr(txIdxBase, detB, bps);
         [neF, ~] = biterr(txIdx, detF, bps);
         [neP, ~] = biterr(txIdx, detP, bps);
 
-        errInt  = errInt  + neI;  errFrac = errFrac + neF;  errPcsi = errPcsi + neP;
+        errInt  = errInt  + neI;
+        errFracBase = errFracBase + neB;
+        errFrac = errFrac + neF;
+        errPcsi = errPcsi + neP;
         totBits = totBits + nBits;
-        accNmseInt = accNmseInt + nmI;  accNmseFrac = accNmseFrac + nmF;
+        accNmseInt = accNmseInt + nmI;
+        accNmseFracBase = accNmseFracBase + nmB;
+        accNmseFrac = accNmseFrac + nmF;
     end
 
     berInt(si)    = berFloor(errInt,  totBits);
+    berFracBase(si) = berFloor(errFracBase, totBits);
     berFrac(si)   = berFloor(errFrac, totBits);
     berPcsi3b(si) = berFloor(errPcsi, totBits);
     nmseInt(si)   = accNmseInt  / nTrials3b;
+    nmseFracBase(si) = accNmseFracBase / nTrials3b;
     nmseFrac(si)  = accNmseFrac / nTrials3b;
+    for xi = 1:nXiNu
+        berEp3b(si, xi) = berFloor(errEp3b(xi), bitsEp3b(xi));
+    end
 
-    fprintf(' %2d   %.2e    %.2e    %.2e    %+.1f      %+.1f\n', ...
-        snrVec(si), berInt(si), berFrac(si), berPcsi3b(si), ...
-        10*log10(nmseInt(si)+1e-20), 10*log10(nmseFrac(si)+1e-20));
+    fprintf(' %2d   %.2e    %.2e    %.2e    %.2e    %+.1f      %+.1f      %+.1f      %.2e   %.2e   %.2e\n', ...
+        snrVec(si), berInt(si), berFracBase(si), berFrac(si), berPcsi3b(si), ...
+        10*log10(nmseInt(si)+1e-20), 10*log10(nmseFracBase(si)+1e-20), ...
+        10*log10(nmseFrac(si)+1e-20), ...
+        berEp3b(si,1), berEp3b(si,2), berEp3b(si,3));
 end
-fprintf('Part 3b done (%.0f s)\n\n', toc(t3b));
+fprintf('Part 3 done (%.0f s)\n\n', toc(t3b));
 
-% ---- Fig.4: 双子图 ----
-fig4 = figure('Position', [80 80 960 380], 'Color', 'w');
+% ---- Fig.3: 三子图 ----
+% EP 配色：浅蓝 -> 深蓝（随 xi_nu 递增）
+cEpLight = [0.39 0.67 0.82];
+cEpMid   = [0.00 0.45 0.74];
+cEpDark  = [0.00 0.27 0.53];
+cEp3     = {cEpLight, cEpMid, cEpDark};
+mkEp3    = {'o', 's', 'd'};
+lnEp3    = {'--', '-.', '-'};
 
-subplot(1,2,1); hold on; grid on; box on;
+fig4 = figure('Position', [60 60 1400 400], 'Color', 'w');
+
+% (a) BER vs SNR
+subplot(1,3,1); hold on; grid on; box on;
+for xi = 1:nXiNu
+    semilogy(snrVec, berEp3b(:,xi), [lnEp3{xi} mkEp3{xi}], ...
+        'Color', cEp3{xi}, 'LineWidth', 1.6, 'MarkerSize', 6, ...
+        'MarkerFaceColor', cEp3{xi}, ...
+        'DisplayName', sprintf('EP \\xi_\\nu=%d (\\eta=%.2f)', xiNuVec(xi), seEp3b(xi)));
+end
 semilogy(snrVec, berInt, '-o', 'Color', cBlue, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cBlue, ...
-    'DisplayName', 'Integer Rx (SpreadWidth=0)');
+    'DisplayName', sprintf('GI-Free IntRx (\\eta=%.2f)', seGfInt));
+semilogy(snrVec, berFracBase, '-d', 'Color', cPurple, ...
+    'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cPurple, ...
+    'DisplayName', sprintf('GI-Free FracRx Base (\\eta=%.2f)', seGfFracBase));
 semilogy(snrVec, berFrac, '-^', 'Color', cRed, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cRed, ...
-    'DisplayName', 'Fractional Rx (SpreadWidth=4)');
+    'DisplayName', sprintf('GI-Free FracRx T1P (\\eta=%.2f)', seGfFrac));
 semilogy(snrVec, berPcsi3b, '--s', 'Color', cBlack, ...
     'LineWidth', 1.5, 'MarkerSize', 6, ...
     'DisplayName', 'Perfect CSI');
@@ -543,151 +571,85 @@ applyIeeeStyle(gca);
 ylim([1e-4 1]);
 xlabel('Data SNR (dB)'); ylabel('BER');
 title('(a) BER vs SNR');
-legend('Location', 'southwest', 'FontSize', 9);
+legend('Location', 'southwest', 'FontSize', 7);
 
-subplot(1,2,2); hold on; grid on; box on;
+% (b) NMSE vs SNR
+subplot(1,3,2); hold on; grid on; box on;
 plot(snrVec, 10*log10(nmseInt+1e-20), '-o', 'Color', cBlue, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cBlue, ...
-    'DisplayName', 'Integer Rx');
+    'DisplayName', 'GI-Free IntRx');
+plot(snrVec, 10*log10(nmseFracBase+1e-20), '-d', 'Color', cPurple, ...
+    'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cPurple, ...
+    'DisplayName', 'GI-Free FracRx Base');
 plot(snrVec, 10*log10(nmseFrac+1e-20), '-^', 'Color', cRed, ...
     'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', cRed, ...
-    'DisplayName', 'Fractional Rx');
+    'DisplayName', 'GI-Free FracRx T1P');
 applyIeeeStyle(gca);
 xlabel('Data SNR (dB)'); ylabel('NMSE (dB)');
 title('(b) Channel Estimation NMSE');
 legend('Location', 'northeast');
 
-sgtitle(sprintf('Fig.4: Fractional Doppler Channel  N=%d P=%d k_{max}=%d', ...
+% (c) SE 柱状图
+subplot(1,3,3); hold on; grid on; box on;
+barLabels = cell(1, nXiNu + 1);
+barValues = zeros(1, nXiNu + 1);
+barColors = [cell2mat(cEp3'); cRed];
+for xi = 1:nXiNu
+    barLabels{xi} = sprintf('EP \\xi_\\nu=%d', xiNuVec(xi));
+    barValues(xi) = seEp3b(xi);
+end
+barLabels{end} = 'GI-Free T1P';
+barValues(end) = seGfFrac;
+bh = bar(barValues, 0.6, 'FaceColor', 'flat');
+for bi = 1:numel(barValues)
+    bh.CData(bi,:) = barColors(bi,:);
+end
+set(gca, 'XTickLabel', barLabels, 'XTick', 1:numel(barValues));
+applyIeeeStyle(gca, 9);
+ylabel('SE (bits/s/Hz)');
+title('(c) Spectral Efficiency');
+
+sgtitle(sprintf('Fig.3: Fractional Doppler  N=%d P=%d k_{max}=%d  EP Overhead vs GI-Free', ...
     numSc, defaultPaths, maxDopplerIdx), ...
     'FontSize', 12, 'FontName', 'Times New Roman');
-savefig(fig4, './Sim/Results/Fig4_FractionalDoppler.fig');
-
-%% ################################################################
-%  Part 4: Agile-c2 PAPR
-%  ################################################################
-fprintf('==================== Part 4: Agile-c2 PAPR ====================\n');
-
-cfgPapr = GiFreeConfig();
-cfgPapr.NumSubcarriers       = numSc;
-cfgPapr.ModulationOrder      = modOrder;
-cfgPapr.MaxDelaySpread       = maxDelay;
-cfgPapr.MaxDopplerIndex      = maxDopplerIdx;
-cfgPapr.NumPaths             = defaultPaths;
-cfgPapr.DopplerGuard         = dopplerGuard3;
-cfgPapr.SpreadWidth          = 0;
-cfgPapr.PilotSnrDb           = pilotSnrGf;
-cfgPapr.MaxSicIterations     = 10;
-cfgPapr.NumPathsUpper        = 6;
-cfgPapr.UseFractionalDoppler = false;
-cfgPapr.AgileQ               = 0;
-txPapr = GiFreeTransmitter(cfgPapr);
-
-agileQ = 32;
-candidates = AgileC2Optimizer.generateCandidates(numSc, agileQ);
-
-nFrames4  = 2000;
-snrLin4   = 10^(15/10);
-paprBase  = zeros(nFrames4, 1);
-paprAgile = zeros(nFrames4, 1);
-
-t4 = tic;
-idxVec = (0:numSc-1).';
-chirpPhaseMat = (2*pi*idxVec.^2) * candidates.';
-
-for fi = 1:nFrames4
-    [daftFrame, ~] = txPapr.transmit(snrLin4);
-
-    % 基线 PAPR
-    c2base = cfgPapr.C2BaseValue;
-    tdBase = ifft(daftFrame .* exp(1j * (2*pi*idxVec.^2) * c2base)) * sqrt(numSc);
-    pwBase = abs(tdBase).^2;
-    paprBase(fi) = 10*log10(max(pwBase)/mean(pwBase));
-
-    % 敏捷 PAPR: 批量 IFFT
-    preChirped = daftFrame .* exp(1j * chirpPhaseMat);
-    tdAll = ifft(preChirped) * sqrt(numSc);
-    pwAll = abs(tdAll).^2;
-    paprAllLin = max(pwAll,[],1) ./ mean(pwAll,1);
-    [~, bestIdx] = min(paprAllLin);
-    paprAgile(fi) = 10*log10(paprAllLin(bestIdx));
-end
-
-fprintf('Part 4 done (%.1f s)\n', toc(t4));
-
-p90base  = prctile(paprBase, 90);
-p90agile = prctile(paprAgile, 90);
-fprintf('  PAPR@90%%ile: Baseline=%.2f dB  Agile(Q=%d)=%.2f dB  Reduction=%.2f dB\n\n', ...
-    p90base, agileQ, p90agile, p90base - p90agile);
-
-% ---- Fig.5 ----
-fig5 = figure('Position', [120 120 560 420], 'Color', 'w');
-ccdfProb = (nFrames4:-1:1) / nFrames4;
-semilogy(sort(paprBase), ccdfProb, '-', 'Color', cBlue, 'LineWidth', 2, ...
-    'DisplayName', sprintf('Baseline c_2 (P90=%.1f dB)', p90base));
-hold on;
-semilogy(sort(paprAgile), ccdfProb, '-', 'Color', cRed, 'LineWidth', 2, ...
-    'DisplayName', sprintf('Agile Q=%d (P90=%.1f dB)', agileQ, p90agile));
-yline(0.1, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
-hold off;
-applyIeeeStyle(gca);
-ylim([1e-2 1]);
-xlabel('PAPR (dB)'); ylabel('CCDF = Pr(PAPR > x)');
-title(sprintf('Fig.5: Agile-c_2 PAPR CCDF  N=%d  Q=%d', numSc, agileQ));
-legend('Location', 'southwest');
-savefig(fig5, './Sim/Results/Fig5_AgilePapr.fig');
+savefig(fig4, fullfile(figuresDir, 'Fig3_FractionalDoppler.fig'));
 
 %% ==================== 汇总 ====================
 fprintf('============================================================\n');
-fprintf('  All simulations complete. 5 figures generated.\n');
+fprintf('  All simulations complete. 3 figures generated.\n');
 fprintf('  Fig.1: AFDM vs OFDM  (Fractional Doppler)\n');
-fprintf('  Fig.2: EP vs GI-Free (Integer Doppler + SE)\n');
-fprintf('  Fig.3: CFAR Threshold (Variable path count)\n');
-fprintf('  Fig.4: Fractional Doppler (Int Rx vs Frac Rx)\n');
-fprintf('  Fig.5: Agile-c2 PAPR CCDF\n');
+fprintf('  Fig.2: CFAR Threshold (Variable path count)\n');
+fprintf('  Fig.3: Fractional Doppler (EP xi_nu=1/2/4 vs GI-Free Base/T1P)\n');
+fprintf('  Figures -> Sim/Results/Figures/\n');
+fprintf('  Log    -> Sim/Results/Logs/');
 fprintf('============================================================\n');
+diary off;
 
 %% ==================== 辅助函数 ====================
 
-function val = berFloor(numErrors, totalBits)
-% berFloor  BER 计算 (含零错误时的 Clopper-Pearson 95% 置信上限)
-%
-%   Rule of 3: P(X=0|p) = (1-p)^N <= 0.05  =>  p <= 3/N
-%   含义: 95% 置信度下真实 BER 不超过此值, 防止 semilogy 断裂
-    if numErrors > 0
-        val = numErrors / totalBits;
-    else
-        val = 3 / totalBits;
+function [txFrame, txDataIndices] = transmitWithFixedSeed(systemObj, dataSnrLin, rngState)
+% TRANSMITWITHFIXEDSEED 用固定随机态生成一帧，便于跨配置共享同一组数据。
+% 输入:
+%   systemObj - GI-Free 系统对象。
+%   dataSnrLin - 数据 SNR 线性值。
+%   rngState - trial 开始时保存的随机态。
+% 输出:
+%   txFrame - 发射帧。
+%   txDataIndices - 发送数据索引。
+
+    previousState = rng;
+    cleanupObj = onCleanup(@() rng(previousState));
+    rng(rngState);
+
+    if systemObj.Config.UseDynamicPilot
+        systemObj.Config.CurrentDataSnrLin = dataSnrLin;
     end
-end
-
-function [delays, dopplers, gains] = generateRandomChannel(numPaths, maxDelay, maxDoppler, isFractional)
-% generateRandomChannel  随机信道参数生成 (Jakes 多普勒频谱)
-    allDelays = (0:maxDelay).';
-    delays    = sort(allDelays(randperm(numel(allDelays), numPaths)));
-    thetas    = -pi + 2*pi*rand(numPaths, 1);
-    dopplers  = maxDoppler * cos(thetas);
-
-    if ~isFractional
-        dopplers = round(dopplers);
-        for k = 2:numPaths
-            attempts = 0;
-            while any(delays(1:k-1) == delays(k) & ...
-                      dopplers(1:k-1) == dopplers(k)) && attempts < 100
-                thetas(k)   = -pi + 2*pi*rand();
-                dopplers(k) = round(maxDoppler * cos(thetas(k)));
-                attempts    = attempts + 1;
-            end
-        end
-    end
-
-    gains = sqrt(1/(2*numPaths)) * (randn(numPaths,1) + 1j*randn(numPaths,1));
-    delays   = delays(:);
-    dopplers = dopplers(:);
-    gains    = gains(:);
+    [txFrame, txDataIndices] = systemObj.Transmitter.transmit(dataSnrLin);
+    clear cleanupObj;
 end
 
 function detected = paperDetect(rxSig, numSc, c1, c2, amp, locStep, maxDelay, maxDop, thr)
-% paperDetect  论文固定门限路径检测 [Zhou et al. 2024, eq.(17)-(18)]
+% PAPERDETECT 论文固定门限路径检测实现 [Zhou et al. 2024, eq.(17)-(18)]
     maxPossible = (maxDelay + 1) * (2 * maxDop + 1);
     buf   = zeros(maxPossible, 3);
     count = 0;
@@ -706,7 +668,7 @@ function detected = paperDetect(rxSig, numSc, c1, c2, amp, locStep, maxDelay, ma
 end
 
 function hEff = buildHeff(builder, pathParams)
-% buildHeff  从检测路径参数构造等效信道矩阵
+% BUILDHEFF 从路径参数构造有效信道矩阵
     numSc = builder.Config.NumSubcarriers;
     if isempty(pathParams)
         hEff = sparse(numSc, numSc);
@@ -716,7 +678,7 @@ function hEff = buildHeff(builder, pathParams)
 end
 
 function [nCorrect, nFalse] = matchPaths(trueP, estP)
-% matchPaths  路径匹配 (按 delay + round(doppler))
+% MATCHPATHS 路径匹配统计（按 delay + round(doppler)）
     nT = size(trueP, 1);  nE = size(estP, 1);
     matched = false(nT, 1);  falseAlarm = true(nE, 1);
     for ei = 1:nE
@@ -733,7 +695,7 @@ function [nCorrect, nFalse] = matchPaths(trueP, estP)
 end
 
 function val = quickBer(rxSig, hEst, pilotFrame, regParam, numSc, dataPos, snrLin, modOrd, txIdx)
-% quickBer  LMMSE 检测 BER (隔离门限贡献, 使用 biterr)
+% QUICKBER 计算一次 LMMSE 检测 BER（用于快速诊断）
     cleanSig = rxSig - hEst * pilotFrame;
     estSig   = GiFreeReceiver.lmmseDetect(cleanSig, hEst, regParam, numSc, dataPos);
     rxIdx    = qamdemod(estSig(dataPos)/sqrt(snrLin), modOrd, 'UnitAveragePower', true);
@@ -741,10 +703,4 @@ function val = quickBer(rxSig, hEst, pilotFrame, regParam, numSc, dataPos, snrLi
     val = nErr / (numel(txIdx) * log2(modOrd));
 end
 
-function applyIeeeStyle(ax, fontSize)
-% applyIeeeStyle  委托 PlotStyle.apply() 实现 IEEE 论文风格
-%   参考 GI-Free 论文 (2404.01088v1) Fig.5 配色和排版
-    if nargin < 2, fontSize = 11; end
-    ps = PlotStyle();
-    ps.apply(ax, fontSize);
-end
+

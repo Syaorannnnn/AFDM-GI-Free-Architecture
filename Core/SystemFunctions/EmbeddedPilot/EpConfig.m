@@ -1,14 +1,7 @@
 classdef EpConfig < handle
-    % EpConfig: EP-AFDM 系统参数配置 (单导频版)
+% EpConfig: Embedded Pilot 链路的配置对象及派生参数。
     %
-    % 设计理念:
-    %   以 TotalSubcarriers (空口物理帧长) 为顶层输入, 确保与 GI-Free 公平对比.
-    %   推导链:
-    %     TotalSubcarriers → PrefixLength = MaxPathDelays
-    %                      → NumDataSubcarriers = TotalSubcarriers - PrefixLength
-    %                      → Chirp, ZP, 导频, 资源映射
     %
-    % 导频方案: 仅支持单导频, DAFT 域索引 = ZP + 1
 
     properties (Access = public)
         BitsPerSymbol
@@ -16,14 +9,25 @@ classdef EpConfig < handle
         WaveformType
 
         TotalSubcarriers
-        MaxPathDelays
-        MaxNormDoppler
+        MaxDelaySamples
+        MaxDopplerIdx
         DopplerGuard
         NumPaths
 
-        PilotSnr
+        PilotSnrDb
 
         ManualZeroPaddingLength
+    end
+
+    properties (Dependent)
+        MaxPathDelays
+        MaxNormDoppler
+        PilotSnr
+
+        PilotPos1
+        PilotPos0
+        DataPos1
+        DataPos0
     end
 
     properties (SetAccess = private)
@@ -43,44 +47,97 @@ classdef EpConfig < handle
     methods
 
         function set.TotalSubcarriers(obj, val)
-            obj.TotalSubcarriers = val; obj.updateDerivedParams();
+            obj.TotalSubcarriers = val;
+            obj.updateDerivedParams();
         end
 
-        function set.MaxPathDelays(obj, val)
-            obj.MaxPathDelays = val; obj.updateDerivedParams();
+        function set.MaxDelaySamples(obj, val)
+            obj.MaxDelaySamples = val;
+            obj.updateDerivedParams();
+        end
+
+        function set.MaxDopplerIdx(obj, val)
+            obj.MaxDopplerIdx = val;
+            obj.updateDerivedParams();
         end
 
         function set.ManualZeroPaddingLength(obj, val)
-            obj.ManualZeroPaddingLength = val; obj.updateDerivedParams();
+            obj.ManualZeroPaddingLength = val;
+            obj.updateDerivedParams();
         end
 
+        function set.MaxPathDelays(obj, val)
+            EpConfig.warnDeprecatedAlias('MaxPathDelays', 'MaxDelaySamples');
+            obj.MaxDelaySamples = val;
+        end
+
+        function val = get.MaxPathDelays(obj)
+            val = obj.MaxDelaySamples;
+        end
+
+        function set.MaxNormDoppler(obj, val)
+            EpConfig.warnDeprecatedAlias('MaxNormDoppler', 'MaxDopplerIdx');
+            obj.MaxDopplerIdx = val;
+        end
+
+        function val = get.MaxNormDoppler(obj)
+            val = obj.MaxDopplerIdx;
+        end
+
+        function set.PilotSnr(obj, val)
+            EpConfig.warnDeprecatedAlias('PilotSnr', 'PilotSnrDb');
+            obj.PilotSnrDb = val;
+        end
+
+        function val = get.PilotSnr(obj)
+            val = obj.PilotSnrDb;
+        end
+
+        function val = get.PilotPos1(obj)
+            val = obj.PilotIndex;
+        end
+
+        function val = get.PilotPos0(obj)
+            val = obj.PilotIndex - 1;
+        end
+
+        function val = get.DataPos1(obj)
+            val = obj.ActiveIndices(:);
+        end
+
+        function val = get.DataPos0(obj)
+            val = obj.ActiveIndices(:) - 1;
+        end
+
+        % updateDerivedParams: 根据基础参数更新所有派生量。
         function updateDerivedParams(obj)
-            % 初始化守卫: 属性默认值按声明顺序赋值时, 后续属性仍为 []
-            if isempty(obj.TotalSubcarriers) || isempty(obj.MaxPathDelays) || ...
-               isempty(obj.MaxNormDoppler)   || isempty(obj.DopplerGuard)
+            if isempty(obj.TotalSubcarriers) || isempty(obj.MaxDelaySamples) || ...
+               isempty(obj.MaxDopplerIdx)    || isempty(obj.DopplerGuard)
                 return;
             end
 
-            obj.PrefixLength = obj.MaxPathDelays;
-            N = obj.TotalSubcarriers - obj.PrefixLength;
-            obj.NumDataSubcarriers = N;
+            % N_data = N_total - PrefixLength
+            obj.PrefixLength = obj.MaxDelaySamples;
+            numDataSubcarriers = obj.TotalSubcarriers - obj.PrefixLength;
+            obj.NumDataSubcarriers = numDataSubcarriers;
 
-            if N <= 0
+            if numDataSubcarriers <= 0
                 error('EpConfig:BadN', ...
-                    'TotalSubcarriers (%d) 须大于 PrefixLength (%d)', ...
+                    'TotalSubcarriers (%d) must be larger than PrefixLength (%d).', ...
                     obj.TotalSubcarriers, obj.PrefixLength);
             end
 
-            obj.ChirpParam1 = (2 * (obj.MaxNormDoppler + obj.DopplerGuard) + 1) / (2 * N);
-            obj.ChirpParam2 = 1 / (N ^ 2 * 2 * pi);
+            obj.ChirpParam1 = ...
+                (2 * (obj.MaxDopplerIdx + obj.DopplerGuard) + 1) / (2 * numDataSubcarriers);
+            obj.ChirpParam2 = 1 / (numDataSubcarriers ^ 2 * 2 * pi);
 
-            if (2 * (obj.MaxNormDoppler + obj.DopplerGuard) * (obj.MaxPathDelays + 1)) ...
-                    + obj.MaxPathDelays > N
-                error('EpConfig:Orth', '子载波不满足正交条件');
+            if (2 * (obj.MaxDopplerIdx + obj.DopplerGuard) * (obj.MaxDelaySamples + 1)) ...
+                    + obj.MaxDelaySamples > numDataSubcarriers
+                error('EpConfig:Orth', 'Subcarriers do not satisfy orthogonality condition.');
             end
 
-            zpTheory = ceil((obj.MaxPathDelays + 1) * ...
-                (2 * (obj.MaxNormDoppler + obj.DopplerGuard) + 1) - 1);
+            zpTheory = ceil((obj.MaxDelaySamples + 1) * ...
+                (2 * (obj.MaxDopplerIdx + obj.DopplerGuard) + 1) - 1);
             obj.TheoreticalZeroPaddingLength = zpTheory;
 
             if obj.ManualZeroPaddingLength > 0
@@ -89,20 +146,41 @@ classdef EpConfig < handle
                 obj.ZeroPaddingLength = zpTheory;
             end
 
-            % 单导频
             obj.PilotSequenceLength = 1;
             obj.PilotIndex = obj.ZeroPaddingLength + 1;
             obj.PilotSequence = 1;
 
             pilotSpan = 2 * obj.ZeroPaddingLength + obj.PilotSequenceLength;
-            obj.NumActiveCarriers = N - pilotSpan;
-            obj.ActiveIndices = (pilotSpan + 1):N;
+            obj.NumActiveCarriers = numDataSubcarriers - pilotSpan;
+            obj.ActiveIndices = (pilotSpan + 1):numDataSubcarriers;
 
             if obj.NumActiveCarriers <= 0
-                error('EpConfig:NoData', '开销 (%d) 超过子载波 (%d)', pilotSpan, N);
+                error('EpConfig:NoData', ...
+                    'Pilot/ZP overhead (%d) exceeds available subcarriers (%d).', ...
+                    pilotSpan, numDataSubcarriers);
+            end
+        end
+
+    end
+
+    methods (Static, Access = private)
+
+        % warnDeprecatedAlias: 兼容旧字段名并给出一次性弃用告警。
+        function warnDeprecatedAlias(oldName, newName)
+            persistent warnedMap;
+            if isempty(warnedMap)
+                warnedMap = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+            end
+
+            warnKey = [oldName '->' newName];
+            if ~isKey(warnedMap, warnKey)
+                warning('EpConfig:DeprecatedAlias', ...
+                    'Property "%s" is deprecated. Use "%s" instead.', oldName, newName);
+                warnedMap(warnKey) = true;
             end
         end
 
     end
 
 end
+

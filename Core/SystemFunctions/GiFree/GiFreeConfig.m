@@ -1,18 +1,29 @@
 classdef GiFreeConfig < handle
-    % GiFreeConfig  GI-Free AFDM 系统参数配置
-    %
-    %   Agile-AFDM 优化:
-    %     AgileQ > 0 时启用 c2 敏捷优化, 模式由 AgileMode 控制:
-    %       'standard'     — 标准 PAPR 度量 (min max|s|²/mean|s|²)
-    %       'pilotAware'   — 导频感知交叉项度量 (min max Δ[n])
-    %       'hierarchical' — 两阶段层级搜索 (3√Q 次 FFT 替代 Q 次)
-    %     AgileQ = 0 时使用默认 c2, 完全向后兼容.
+% GIFREECONFIG - GI-Free 系统配置对象与派生参数集合
+%
+%   描述:
+%   维护 GI-Free 架构的基础参数与依赖参数（Dependent properties），包含
+%   DAFT chirp 参数、导频/数据位置、导频功率映射以及兼容旧命名别名等逻辑。
+%
+%   语法:
+%   cfg = GiFreeConfig();
+%   cfg.NumSubcarriers = 512;
+%   cfg.validate();
+%
+%   输出:
+%   cfg - (GiFreeConfig) 可直接传入 GiFreeSystem / GiFreeTransmitter / GiFreeReceiver。
+%
+%   NOTE:
+%   PilotPos0/DataPos0 为 0-based 语义；PilotPos1/DataPos1 为 MATLAB 1-based 索引。
+%
+%   版本历史:
+%   2026-04-01 - Aiden - 注释规范化。
 
     properties
         NumSubcarriers
         ModulationOrder
-        MaxDelaySpread
-        MaxDopplerIndex
+        MaxDelaySamples
+        MaxDopplerIdx
         NumPaths
         DopplerGuard
         SpreadWidth
@@ -20,106 +31,185 @@ classdef GiFreeConfig < handle
         MaxSicIterations
         NumPathsUpper
         UseFractionalDoppler
-        NumPilots   = 1
-        ZcRootIndex = 1
-        AgileQ      = 0            % 候选数, 0=禁用, 推荐 32
-        AgileMode   = 'standard'   % 'standard' | 'pilotAware' | 'hierarchical'
-        C2Override  = []            % 内部使用, 由 GiFreeSystem 自动写入
+        EarlyPathSearchMode = 'greedy' % 'greedy' | 'beam'
+        BeamWidth = 2
+        BeamDepth = 2
+        BeamStrategyMode = 'fastAdaptive' % 'fastAdaptive' | 'performance' | 'fixed'
+        PerformanceBeamWidth = 2
+        PerformanceBeamDepth = 2
+        BeamExpandFactor = 2
+        BeamMinImproveRatio = 0.005
+        BeamAdaptiveImproveRatio = 0.02
+        BeamAdaptiveSpreadThreshold = 4
+        BeamUncertainMetricRatio = 1.25
+        EnableBeamSignaturePrune = true
+        FeedbackMode = 'soft'      % 'soft' | 'hard'
+        CleaningFeedbackMode = 'soft' % 'soft' | 'hard'
+        CleaningGateMode = 'topk'  % 'topk' | 'adaptive'
+        UseAdaptiveOutputNoise = true
+        EnableDfp = true
+        EnableResidualInjection = true
+        EnableConfidenceGating = true
+        % Phase 0 bootstrap 已退役，以下参数仅为兼容旧脚本保留。
+        EnablePhase0Bootstrap = false
+        EnablePhase0LocalRefine = false
+        Phase0CleanRatio = 0.08
+        BootstrapImproveRatioThreshold = 0.03
+        MaxBootstrapPaths = 5
+        EnableProgressiveCfar = true
+        ProgressiveCfarInitScale = 3.0
+        ProgressiveCfarFinalScale = 1.0
+        EnablePathStabilityGate = true
+        PathStabilityThreshold = 2
+        PathStabilityDopplerTolerance = 1
+        UseWeightedPilotMetric = true
+        PilotClusterWidth = 2
+        % 动态导频模式：导频功率跟踪数据 SNR，使 pilot/noise 恒定（与 EP 行为对齐）
+        UseDynamicPilot = false
+        DynamicPilotBaseDb = 35   % 动态模式下固定的 pilot/noise 比 (dB)
+        CurrentDataSnrLin = 1     % 当前 trial 的数据 SNR 线性值（由 GiFreeSystem 外部设置）
     end
 
     properties (Dependent)
         ChirpParam1
         ChirpParam2
-        C2BaseValue
         PilotAmplitude
         LocStep
         PilotZoneSpan
-        PilotPositions
-        DataPositions
+        PilotPos0
+        DataPos0
+        PilotPos1
+        DataPos1
         NumDataSymbols
         PilotSequence
         PerPilotAmplitude
+
+        MaxDelaySpread
+        MaxDopplerIndex
+        PilotPositions
+        DataPositions
     end
 
     methods
 
+        function set.MaxDelaySpread(obj, val)
+            GiFreeConfig.warnDeprecatedAlias('MaxDelaySpread', 'MaxDelaySamples');
+            obj.MaxDelaySamples = val;
+        end
+
+        function val = get.MaxDelaySpread(obj)
+            val = obj.MaxDelaySamples;
+        end
+
+        function set.MaxDopplerIndex(obj, val)
+            GiFreeConfig.warnDeprecatedAlias('MaxDopplerIndex', 'MaxDopplerIdx');
+            obj.MaxDopplerIdx = val;
+        end
+
+        function val = get.MaxDopplerIndex(obj)
+            val = obj.MaxDopplerIdx;
+        end
+
+        function val = get.PilotPositions(obj)
+            GiFreeConfig.warnDeprecatedAlias('PilotPositions', 'PilotPos0');
+            val = obj.PilotPos0;
+        end
+
+        function val = get.DataPositions(obj)
+            GiFreeConfig.warnDeprecatedAlias('DataPositions', 'DataPos0');
+            val = obj.DataPos0;
+        end
+
+        % VALIDATE 校验 Theorem-1 相关正交约束是否满足。
         function validate(obj)
-            % validate  检查论文A定理1约束 (公式56)
-            %   约束: 2*alpha_max*l_max + 2*alpha_max + l_max < N
-            %   若违反, hEff 的模运算产生歧义, 有效信道矩阵构造错误.
-            lhs = 2 * obj.MaxDopplerIndex * obj.MaxDelaySpread ...
-                + 2 * obj.MaxDopplerIndex + obj.MaxDelaySpread;
+            lhs = 2 * obj.MaxDopplerIdx * obj.MaxDelaySamples ...
+                + 2 * obj.MaxDopplerIdx + obj.MaxDelaySamples;
             if lhs >= obj.NumSubcarriers
                 error('GiFreeConfig:Theorem1Violation', ...
-                    ['论文A定理1约束违反: 2*alpha_max*l_max + 2*alpha_max + l_max = %d >= N = %d\n' ...
-                     '请减小 MaxDopplerIndex (%d) 或 MaxDelaySpread (%d), 或增大 NumSubcarriers (%d).'], ...
+                    ['正交条件不满足: 2*alpha_max*l_max + 2*alpha_max + l_max = %d >= N = %d\n' ...
+                     '请减小 MaxDopplerIdx (%d) 或 MaxDelaySamples (%d)，或增大 NumSubcarriers (%d).'], ...
                     lhs, obj.NumSubcarriers, ...
-                    obj.MaxDopplerIndex, obj.MaxDelaySpread, obj.NumSubcarriers);
+                    obj.MaxDopplerIdx, obj.MaxDelaySamples, obj.NumSubcarriers);
             end
         end
 
         function val = get.ChirpParam1(obj)
-            val = (2 * (obj.MaxDopplerIndex + obj.DopplerGuard) + 1) ...
+            val = (2 * (obj.MaxDopplerIdx + obj.DopplerGuard) + 1) ...
                 / (2 * obj.NumSubcarriers);
         end
 
         function val = get.ChirpParam2(obj)
-            if ~isempty(obj.C2Override)
-                val = obj.C2Override;
-            else
-                val = 1 / (2 * obj.NumSubcarriers^2 * pi);
-            end
-        end
-
-        function val = get.C2BaseValue(obj)
             val = 1 / (2 * obj.NumSubcarriers^2 * pi);
         end
 
         function val = get.PilotAmplitude(obj)
-            val = sqrt(10^(obj.PilotSnrDb / 10));
-        end
-
-        function val = get.LocStep(obj)
-            val = 2 * (obj.MaxDopplerIndex + obj.DopplerGuard) + 1;
-        end
-
-        function val = get.PilotZoneSpan(obj)
-            val = obj.LocStep * (obj.MaxDelaySpread + 1);
-        end
-
-        function val = get.PilotPositions(obj)
-            val = (0:obj.NumPilots - 1).' * obj.PilotZoneSpan;
-        end
-
-        function val = get.DataPositions(obj)
-            allIdx  = (0:obj.NumSubcarriers - 1).';
-            isPilot = ismember(allIdx, obj.PilotPositions);
-            val     = allIdx(~isPilot);
-        end
-
-        function val = get.NumDataSymbols(obj)
-            val = obj.NumSubcarriers - obj.NumPilots;
-        end
-
-        function val = get.PilotSequence(obj)
-            K = obj.NumPilots;
-            if K <= 1
-                val = 1;
+            if obj.UseDynamicPilot
+                % 动态模式: pilot_power = dataSnrLin * 10^(baseDb/10)
+                % 使 pilot/noise = baseDb + dataSNR_dB，与 EP 归一化一致
+                val = sqrt(obj.CurrentDataSnrLin * 10^(obj.DynamicPilotBaseDb / 10));
             else
-                n = (0:K-1).';
-                u = obj.ZcRootIndex;
-                if mod(K, 2) == 1
-                    val = exp(-1j * pi * u * n .* (n + 1) / K);
-                else
-                    val = exp(-1j * pi * u * n .* n / K);
-                end
+                val = sqrt(10^(obj.PilotSnrDb / 10));
             end
         end
 
+        function val = get.LocStep(obj)
+            val = 2 * (obj.MaxDopplerIdx + obj.DopplerGuard) + 1;
+        end
+
+        function val = get.PilotZoneSpan(obj)
+            val = obj.LocStep * (obj.MaxDelaySamples + 1);
+        end
+
+        function val = get.PilotPos0(~)
+            val = 0;
+        end
+
+        function val = get.DataPos0(obj)
+            allPos0 = (0:obj.NumSubcarriers - 1).';
+            isPilot = ismember(allPos0, obj.PilotPos0);
+            val = allPos0(~isPilot);
+        end
+
+        function val = get.PilotPos1(obj)
+            val = obj.PilotPos0 + 1;
+        end
+
+        function val = get.DataPos1(obj)
+            val = obj.DataPos0 + 1;
+        end
+
+        function val = get.NumDataSymbols(obj)
+            val = obj.NumSubcarriers - 1;
+        end
+
+        function val = get.PilotSequence(~)
+            val = 1;
+        end
+
         function val = get.PerPilotAmplitude(obj)
-            val = obj.PilotAmplitude / sqrt(obj.NumPilots);
+            val = obj.PilotAmplitude;
+        end
+
+    end
+
+    methods (Static, Access = private)
+
+        % WARNDEPRECATEDALIAS 对旧字段名访问给出一次性弃用告警。
+        function warnDeprecatedAlias(oldName, newName)
+            persistent warnedMap;
+            if isempty(warnedMap)
+                warnedMap = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+            end
+
+            warnKey = [oldName '->' newName];
+            if ~isKey(warnedMap, warnKey)
+                warning('GiFreeConfig:DeprecatedAlias', ...
+                    'Property "%s" is deprecated. Use "%s" instead.', oldName, newName);
+                warnedMap(warnKey) = true;
+            end
         end
 
     end
 
 end
+

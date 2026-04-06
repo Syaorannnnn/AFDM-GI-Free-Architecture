@@ -1,8 +1,24 @@
 classdef GiFreeTransmitter < handle
-    % GiFreeTransmitter  GI-Free AFDM 发射机 (CAZAC 多导频版)
-    %
-    %   K 个 DAFT 域子载波放置 ZC 导频序列, 其余 N-K 个承载 QAM 数据.
-    %   K = 1 时退化为原始单导频行为.
+% GIFREETRANSMITTER - GI-Free 发射端 DAFT 域组帧
+%
+%   描述:
+%   在 DAFT 域生成一帧发送信号：固定导频位于 PilotPos1，其余 N-1 个子载波
+%   承载 QAM 数据符号。数据符号按 dataSnrLin 做幅度缩放。
+%
+%   语法:
+%   txObj = GiFreeTransmitter(cfg);
+%   [txFrame, txDataIndices] = txObj.transmit(dataSnrLin);
+%
+%   输入:
+%   cfg        - (GiFreeConfig) 系统配置对象。
+%   dataSnrLin - (double) 数据符号线性 SNR。
+%
+%   输出:
+%   txFrame       - (Nx1 complex) DAFT 域发射帧（含导频+数据）。
+%   txDataIndices - ((N-1)x1 int) 发送符号索引。
+%
+%   版本历史:
+%   2026-04-01 - Aiden - 注释规范化。
 
     properties (SetAccess = private)
         Config
@@ -10,6 +26,7 @@ classdef GiFreeTransmitter < handle
 
     methods
 
+        % GIFREETRANSMITTER 构造函数，绑定配置对象。
         function obj = GiFreeTransmitter(cfg)
             arguments
                 cfg (1,1) GiFreeConfig
@@ -17,23 +34,23 @@ classdef GiFreeTransmitter < handle
             obj.Config = cfg;
         end
 
-        function [txFrame, txDataIndices] = transmit(obj, dataSnrLinear)
-            numSc    = obj.Config.NumSubcarriers;
-            modOrder = obj.Config.ModulationOrder;
-            numData  = obj.Config.NumDataSymbols;
+        % TRANSMIT 生成 GI-Free 发射帧并返回真实发送的数据索引。
+        function [txFrame, txDataIndices] = transmit(obj, dataSnrLin)
+            numSubcarriers = obj.Config.NumSubcarriers;
+            modulationOrder = obj.Config.ModulationOrder;
+            numDataSymbols  = obj.Config.NumDataSymbols;
 
-            % 数据符号 (N-K 个)
-            txDataIndices = randi([0, modOrder-1], numData, 1);
-            qamSymbols    = qammod(txDataIndices, modOrder, 'UnitAveragePower', true);
+            txDataIndices = randi([0, modulationOrder-1], numDataSymbols, 1);
+            qamSymbols    = qammod(txDataIndices, modulationOrder, 'UnitAveragePower', true);
 
-            % 组帧: 导频 + 数据
-            txFrame = zeros(numSc, 1);
-            pilotPos1 = obj.Config.PilotPositions + 1;       % 1-based
-            dataPos1  = obj.Config.DataPositions + 1;         % 1-based
+            txFrame = zeros(numSubcarriers, 1);
+            pilotPos1 = obj.Config.PilotPos1;
+            dataPos1  = obj.Config.DataPos1;
             txFrame(pilotPos1) = obj.Config.PerPilotAmplitude * obj.Config.PilotSequence;
-            txFrame(dataPos1)  = qamSymbols * sqrt(dataSnrLinear);
+            txFrame(dataPos1)  = qamSymbols * sqrt(dataSnrLin);
         end
 
     end
 
 end
+

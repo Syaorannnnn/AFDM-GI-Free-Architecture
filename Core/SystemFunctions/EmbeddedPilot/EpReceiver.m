@@ -1,21 +1,7 @@
 classdef EpReceiver < handle
-    % EpReceiver: EP-AFDM 接收机 (单导频版, 修复版)
+% EpReceiver: Embedded Pilot 接收端，含信道估计与数据检测。
     %
-    % 修复记录:
-    %   Bug#1 — rebuildChannel 现在构造循环矩阵, 与 LtvChannel 结构匹配.
-    %           原版只构建了三角矩阵, 缺失环绕项, 导致等效信道完全错误.
-    %   Bug#2 — IP2D 消除现在始终执行 (不再限于 CAZAC 模式).
-    %           导频功率远大于数据, 不消除则数据被导频干扰淹没.
     %
-    % 接收流程 (单导频 + ZP 保护带):
-    %   1. 去 CPP → DAFT 变换
-    %   2. 信道估计 (时域相关搜 + 分数多普勒精搜 + 全局 LS)
-    %   3. IP2D 消除: 从接收信号中减去导频的信道响应
-    %   4. MMSE 均衡数据子载波
-    %   5. 硬判决
-    %
-    % 由于 ZP 保护带保证了导频观测不受数据干扰,
-    % 信道估计本身就是干净的, 无需迭代 SIC.
 
     properties (Access = public)
         CsiMode
@@ -29,17 +15,18 @@ classdef EpReceiver < handle
 
     methods (Access = public)
 
+        % EpReceiver: 函数实现见下方代码。
         function obj = EpReceiver(configObj)
             obj.Config = configObj;
         end
 
+        % receive: 执行接收链路并输出检测结果。
         function rxData = receive(obj, rxSignal, noisePower, physicalChannelMatrix, pilotPower)
             obj.CurrentPilotPower = pilotPower;
 
-            % 去 CPP 前缀
             rxNoPrefix = rxSignal(obj.Config.PrefixLength + 1:end);
 
-            % DAFT 变换
+            % DAFT 鍙樻崲
             if upper(obj.Config.WaveformType) == "AFDM"
                 daftRx = AfdmTransforms.daft(rxNoPrefix, ...
                     obj.Config.ChirpParam1, obj.Config.ChirpParam2);
@@ -47,29 +34,24 @@ classdef EpReceiver < handle
                 daftRx = AfdmTransforms.dft(rxNoPrefix);
             end
 
-            % 获取等效信道矩阵
+            % 鑾峰彇绛夋晥淇￠亾鐭╅樀
             if obj.CsiMode == "Perfect"
-                hEff = AfdmTransforms.generateEffectiveChannelMatrix( ...
+                effectiveChannel = AfdmTransforms.generateEffectiveChannelMatrix( ...
                     physicalChannelMatrix, obj.Config);
             else
-                [hEff, ~] = obj.runChannelEstimator(daftRx);
+                [effectiveChannel, ~] = obj.runChannelEstimator(daftRx);
             end
 
             % ======================================================
-            %  IP2D 消除 (Bug#2 修复: 始终执行)
             %
-            %  导频功率 >> 数据功率, 若不消除, 导频通过信道扩散到
-            %  所有子载波上的能量会完全淹没数据信号.
-            %  做法: 构造仅含导频的 DAFT 域帧, 通过等效信道矩阵
-            %        计算其对所有子载波的贡献, 从接收信号中减去.
             % ======================================================
             pilotFrame = zeros(obj.Config.NumDataSubcarriers, 1);
-            pilotFrame(obj.Config.PilotIndex) = sqrt(obj.CurrentPilotPower);
-            pilotContribution = hEff * pilotFrame;
+            pilotFrame(obj.Config.PilotPos1) = sqrt(obj.CurrentPilotPower);
+            pilotContribution = effectiveChannel * pilotFrame;
             cleanDataSignal = daftRx - pilotContribution;
 
-            % MMSE 均衡 (仅作用于数据子载波列)
-            hData = hEff(:, obj.Config.ActiveIndices);
+            % MMSE 鍧囪　 (浠呬綔鐢ㄤ簬鏁版嵁瀛愯浇娉㈠垪)
+            hData = effectiveChannel(:, obj.Config.DataPos1);
             estData = (hData' * hData + noisePower * eye(obj.Config.NumActiveCarriers)) ...
                 \ (hData' * cleanDataSignal);
 
@@ -83,18 +65,16 @@ classdef EpReceiver < handle
     methods (Access = private)
 
         % ================================================================
-        %  信道估计器: 时域相关搜索 + 分数多普勒精搜 + 全局 LS
         % ================================================================
-        function [hEff, finalPaths] = runChannelEstimator(obj, rxSignalDaft)
+        % runChannelEstimator: 基于导频估计有效信道与路径参数。
+        function [effectiveChannel, finalPaths] = runChannelEstimator(obj, rxSignalDaft)
             N = obj.Config.NumDataSubcarriers;
             c1 = obj.Config.ChirpParam1;
             c2 = obj.Config.ChirpParam2;
 
-            % 构造仅含导频的参考帧
             mockTxFrame = zeros(N, 1);
-            mockTxFrame(obj.Config.PilotIndex) = sqrt(obj.CurrentPilotPower);
+            mockTxFrame(obj.Config.PilotPos1) = sqrt(obj.CurrentPilotPower);
 
-            % 预计算时域导频
             if upper(obj.Config.WaveformType) == "AFDM"
                 timePilot = AfdmTransforms.idaft(mockTxFrame, c1, c2);
             else
@@ -104,24 +84,23 @@ classdef EpReceiver < handle
             residual = rxSignalDaft;
             estPaths = zeros(obj.Config.NumPaths, 3);
 
-            delayRange = 0:obj.Config.MaxPathDelays;
-            dopplerRange = -obj.Config.MaxNormDoppler:obj.Config.MaxNormDoppler;
+            delayRange = 0:obj.Config.MaxDelaySamples;
+            dopplerRange = -obj.Config.MaxDopplerIdx:obj.Config.MaxDopplerIdx;
 
-            % 预计算多普勒相位矩阵 (向量化粗搜)
             timeVec = (0:N - 1).';
             normDopplerVec = dopplerRange(:).' / N;
             dopplerPhaseMat = exp(-1j * 2 * pi * timeVec .* normDopplerVec);
 
+            % 迭代处理：按当前索引更新状态。
             for pathIdx = 1:obj.Config.NumPaths
                 bestCorr = -inf;
                 bestDelay = 0;
                 bestDopIdx = 1;
 
-                % --- 向量化粗搜: 遍历时延, 批量处理多普勒 ---
                 for dIdx = 1:length(delayRange)
                     curDelay = delayRange(dIdx);
                     shifted = circshift(timePilot, curDelay);
-                    candidates = shifted .* dopplerPhaseMat;  % N × numDoppler
+                    candidates = shifted .* dopplerPhaseMat;  % 大小: N x numDoppler
 
                     if upper(obj.Config.WaveformType) == "AFDM"
                         daftCand = AfdmTransforms.daft(candidates, c1, c2);
@@ -129,7 +108,6 @@ classdef EpReceiver < handle
                         daftCand = AfdmTransforms.dft(candidates);
                     end
 
-                    % 窗口掩膜: 仅保留峰值附近 ±3 bin (单导频特征)
                     for col = 1:size(daftCand, 2)
                         daftCand(:, col) = obj.applyPeakWindow(daftCand(:, col), 3);
                     end
@@ -147,13 +125,11 @@ classdef EpReceiver < handle
 
                 coarseDoppler = dopplerRange(bestDopIdx);
 
-                % --- 分数多普勒精搜 ---
                 costFn = @(frac) -obj.calcCorrelation( ...
                     bestDelay, coarseDoppler + frac, timePilot, residual, [c1, c2]);
                 [fracOpt, ~] = fminbnd(costFn, -0.5, 0.5, optimset('TolX', 1e-3));
                 finalDoppler = coarseDoppler + fracOpt;
 
-                % --- 提取当前径, 更新残差 (SIC) ---
                 [cleanSig, pathEnergy] = obj.simulatePathEffect( ...
                     bestDelay, finalDoppler, timePilot, [c1, c2]);
                 estGain = (cleanSig' * residual) / (pathEnergy + 1e-12);
@@ -161,9 +137,10 @@ classdef EpReceiver < handle
                 estPaths(pathIdx, :) = [bestDelay, finalDoppler, estGain];
             end
 
-            % --- 全局 LS 联合优化增益 ---
+            % --- 鍏ㄥ眬 LS 鑱斿悎浼樺寲澧炵泭 ---
             basisMat = zeros(N, obj.Config.NumPaths);
 
+            % 迭代处理：按当前索引更新状态。
             for pathIdx = 1:obj.Config.NumPaths
                 basisMat(:, pathIdx) = obj.simulatePathEffect( ...
                     estPaths(pathIdx, 1), estPaths(pathIdx, 2), timePilot, [c1, c2]);
@@ -173,14 +150,14 @@ classdef EpReceiver < handle
             estPaths(:, 3) = refinedGains;
             finalPaths = estPaths;
 
-            % --- 重建等效信道 ---
+            % --- 閲嶅缓绛夋晥淇￠亾 ---
             physChannel = obj.rebuildChannel(finalPaths);
-            hEff = AfdmTransforms.generateEffectiveChannelMatrix(physChannel, obj.Config);
+            effectiveChannel = AfdmTransforms.generateEffectiveChannelMatrix(physChannel, obj.Config);
         end
 
         % ================================================================
-        %  模拟单径对 DAFT 域导频的效果 (用于相关搜索)
         % ================================================================
+        % simulatePathEffect: 仿真单路径对导频的响应。
         function [daftSig, energy] = simulatePathEffect(obj, delay, doppler, timePilot, chirpParams)
             N = size(timePilot, 1);
             timeVec = (0:N - 1).';
@@ -194,8 +171,6 @@ classdef EpReceiver < handle
                 daftSig = AfdmTransforms.dft(pathTimeDomain);
             end
 
-            % 峰值窗口掩膜
-            daftSig = obj.applyPeakWindow(daftSig, 3);
 
             if nargout > 1
                 energy = sum(abs(daftSig) .^ 2);
@@ -203,8 +178,8 @@ classdef EpReceiver < handle
         end
 
         % ================================================================
-        %  峰值窗口: 保留峰值附近 ±radius 的 bin, 其余置零
         % ================================================================
+        % applyPeakWindow: 仅保留峰值邻域抑制旁瓣干扰。
         function masked = applyPeakWindow(~, sig, radius)
             N = length(sig);
             [~, peakIdx] = max(abs(sig));
@@ -216,8 +191,8 @@ classdef EpReceiver < handle
         end
 
         % ================================================================
-        %  相关性代价函数 (分数多普勒精搜用)
         % ================================================================
+        % calcCorrelation: 计算候选路径与残差的相关性。
         function val = calcCorrelation(obj, delay, doppler, timePilot, rxSig, chirpParams)
             [daftSig, energy] = obj.simulatePathEffect(delay, doppler, timePilot, chirpParams);
 
@@ -229,18 +204,11 @@ classdef EpReceiver < handle
         end
 
         % ================================================================
-        %  从路径参数重建物理信道矩阵 (Bug#1 修复: 循环结构)
         %
-        %  LtvChannel 构造的是循环移位 + 多普勒相位矩阵:
-        %    H(r, c) = Σ_i  h_i · exp(-j2π·ν_i·r/N_tot)
-        %              当 r = mod(c + l_i, N_tot) 时
+        %    H(r, c) = 危_i  h_i 路 exp(-j2蟺路谓_i路r/N_tot)
         %
-        %  原版 rebuildChannel 只生成了 r > l_i 的下三角部分,
-        %  缺少了 r < l_i 的环绕部分 (当 c + l_i ≥ N_tot 时 r 应回绕到 0).
-        %  这导致重建矩阵与真实信道在结构上完全不同.
-        %
-        %  修复: 用 mod 运算正确生成循环移位的行索引.
         % ================================================================
+        % rebuildChannel: 由估计路径重建时域物理信道矩阵。
         function physChannel = rebuildChannel(obj, pathParams)
             totalSc = obj.Config.TotalSubcarriers;
             numDataSc = obj.Config.NumDataSubcarriers;
@@ -253,21 +221,18 @@ classdef EpReceiver < handle
             allCols = [];
             allVals = [];
 
-            colVec = (0:totalSc - 1).';  % 0-based 列索引
-
+            colVec = (0:totalSc - 1).';
             for i = 1:numPaths
                 delay = round(pathParams(i, 1));
                 doppler = pathParams(i, 2) * dopplerScale;
                 gain = pathParams(i, 3);
 
-                % 循环移位: 列 c → 行 mod(c + delay, N_total)
                 rowVec = mod(colVec + delay, totalSc);
 
                 % 多普勒相位: 作用在行索引上
                 phases = exp(-1j * 2 * pi * doppler * rowVec / totalSc);
                 vals = gain * phases;
 
-                % 转为 1-based 索引
                 allRows = [allRows; rowVec + 1]; %#ok<AGROW>
                 allCols = [allCols; colVec + 1]; %#ok<AGROW>
                 allVals = [allVals; vals];        %#ok<AGROW>
@@ -279,3 +244,4 @@ classdef EpReceiver < handle
     end
 
 end
+

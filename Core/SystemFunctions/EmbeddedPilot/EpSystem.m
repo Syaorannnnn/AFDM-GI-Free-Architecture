@@ -1,11 +1,5 @@
 classdef EpSystem < handle
-    % EpSystem  EP-AFDM 系统级编排器 (单导频版)
-    %
-    % 用法:
-    %   cfg = EpConfig();
-    %   cfg.TotalSubcarriers = 256;  % 空口总采样 (与 GiFreeConfig.NumSubcarriers 对齐)
-    %   sys = EpSystem(cfg);
-    %   result = sys.runTrial(snrDb, pathDelays, pathDopplers, pathGains);
+% EpSystem: Embedded Pilot 端到端单次试验封装。
 
     properties (SetAccess = private)
         Config
@@ -15,6 +9,7 @@ classdef EpSystem < handle
 
     methods
 
+        % EpSystem: 函数实现见下方代码。
         function obj = EpSystem(cfg)
             arguments
                 cfg (1, 1) EpConfig
@@ -25,54 +20,53 @@ classdef EpSystem < handle
             obj.Receiver = EpReceiver(cfg);
         end
 
-        %% ========== 单次试验 (估计 CSI) ==========
-        function result = runTrial(obj, snrDb, pathDelays, pathDopplers, pathGains)
+        % runTrial: 执行一次完整仿真试验。
+        function result = runTrial(obj, dataSnrDb, pathDelays, pathDopplers, pathGains)
             totalSc = obj.Config.TotalSubcarriers;
-            bps = obj.Config.BitsPerSymbol;
+            bitsPerSymbol = obj.Config.BitsPerSymbol;
 
-            snrLin = 10 ^ (snrDb / 10);
-            pilotPower = 10 ^ (obj.Config.PilotSnr / 10);
-            noisePower = 1 / snrLin;
+            dataSnrLin = 10 ^ (dataSnrDb / 10);
+            pilotPowerLin = 10 ^ (obj.Config.PilotSnrDb / 10);
+            noisePowerLin = 1 / dataSnrLin;
 
-            [txSig, txData] = obj.Transmitter.transmit(pilotPower);
-
+            [txSig, txData] = obj.Transmitter.transmit(pilotPowerLin);
             physH = LtvChannel(totalSc, pathDelays, pathDopplers, pathGains);
 
-            noiseVec = sqrt(noisePower / 2) * (randn(totalSc, 1) + 1j * randn(totalSc, 1));
+            noiseVec = sqrt(noisePowerLin / 2) * (randn(totalSc, 1) + 1j * randn(totalSc, 1));
             rxSig = physH * txSig + noiseVec;
 
             obj.Receiver.CsiMode = "Estimated";
-            rxData = obj.Receiver.receive(rxSig, noisePower, physH, pilotPower);
+            rxData = obj.Receiver.receive(rxSig, noisePowerLin, physH, pilotPowerLin);
 
-            [result.bitErrors, result.totalBits] = EpSystem.computeBer(txData, rxData, bps);
+            [result.bitErrors, result.totalBits] = EpSystem.computeBer(txData, rxData, bitsPerSymbol);
         end
 
-        %% ========== 单次试验 (完美 CSI) ==========
-        function result = runTrialPerfectCsi(obj, snrDb, pathDelays, pathDopplers, pathGains)
+        % runTrialPerfectCsi: 在 Perfect CSI 假设下运行试验。
+        function result = runTrialPerfectCsi(obj, dataSnrDb, pathDelays, pathDopplers, pathGains)
             totalSc = obj.Config.TotalSubcarriers;
-            bps = obj.Config.BitsPerSymbol;
+            bitsPerSymbol = obj.Config.BitsPerSymbol;
 
-            snrLin = 10 ^ (snrDb / 10);
-            pilotPower = 10 ^ (obj.Config.PilotSnr / 10);
-            noisePower = 1 / snrLin;
+            dataSnrLin = 10 ^ (dataSnrDb / 10);
+            pilotPowerLin = 10 ^ (obj.Config.PilotSnrDb / 10);
+            noisePowerLin = 1 / dataSnrLin;
 
-            [txSig, txData] = obj.Transmitter.transmit(pilotPower);
-
+            [txSig, txData] = obj.Transmitter.transmit(pilotPowerLin);
             physH = LtvChannel(totalSc, pathDelays, pathDopplers, pathGains);
 
-            noiseVec = sqrt(noisePower / 2) * (randn(totalSc, 1) + 1j * randn(totalSc, 1));
+            noiseVec = sqrt(noisePowerLin / 2) * (randn(totalSc, 1) + 1j * randn(totalSc, 1));
             rxSig = physH * txSig + noiseVec;
 
             obj.Receiver.CsiMode = "Perfect";
-            rxData = obj.Receiver.receive(rxSig, noisePower, physH, pilotPower);
+            rxData = obj.Receiver.receive(rxSig, noisePowerLin, physH, pilotPowerLin);
 
-            [result.bitErrors, result.totalBits] = EpSystem.computeBer(txData, rxData, bps);
+            [result.bitErrors, result.totalBits] = EpSystem.computeBer(txData, rxData, bitsPerSymbol);
         end
 
     end
 
     methods (Static)
 
+        % computeBer: 统计误比特数与总比特数。
         function [bitErrors, totalBits] = computeBer(txIdx, rxIdx, bitsPerSymbol)
             txBits = de2bi(txIdx, bitsPerSymbol, 'left-msb');
             rxBits = de2bi(rxIdx, bitsPerSymbol, 'left-msb');
@@ -83,3 +77,4 @@ classdef EpSystem < handle
     end
 
 end
+

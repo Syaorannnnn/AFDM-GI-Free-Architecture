@@ -1,16 +1,24 @@
-classdef FractionalChannelBuilder < handle
-    % FractionalChannelBuilder  分数多普勒信道矩阵构造工具 (CAZAC 多导频扩展版)
-    %
-    %   新增/修改:
-    %     buildPilotResponseVector : 接受可选 pilotIdx 参数 (默认 0, 向后兼容)
-    %     buildCompositePilotResponse : K 个导频的相干合成响应向量
-
+classdef FractionalChannelBuilder < IChannelOperator
+% FRACTIONALCHANNELBUILDER - 分数 Doppler 有效信道构造器
+%
+%   描述:
+%   在 DAFT 等效模型下构建 GI-Free 多径有效信道矩阵，支持分数 Doppler，
+%   核心使用 Dirichlet 核及其导数来构建路径响应和精细搜索基。
+%
+%   语法:
+%   builder = FractionalChannelBuilder(cfg);
+%   hPath = builder.buildPathMatrix(delay, doppler);
+%   hEff  = builder.buildEffectiveChannel(pathParams);
+%
+%   版本历史:
+%   2026-04-01 - Aiden - 注释规范化。
     properties (SetAccess = private)
         Config
     end
 
     methods
 
+        % FRACTIONALCHANNELBUILDER 构造函数，绑定 GiFree 配置对象。
         function obj = FractionalChannelBuilder(cfg)
             arguments
                 cfg (1,1) GiFreeConfig
@@ -18,7 +26,7 @@ classdef FractionalChannelBuilder < handle
             obj.Config = cfg;
         end
 
-        %% ---------- 单径信道矩阵 (向量化) ----------
+        % BUILDPATHMATRIX 构造单路径有效信道矩阵（含分数 Doppler 展宽）。
         function hPath = buildPathMatrix(obj, delay, doppler)
             numSc    = obj.Config.NumSubcarriers;
             chirpC1  = obj.Config.ChirpParam1;
@@ -39,7 +47,7 @@ classdef FractionalChannelBuilder < handle
                     fracPart, kvRange(idx), numSc);
             end
 
-            pVec       = (0:numSc-1)';
+            pVec       = (0:numSc-1).';
             c2PSq      = chirpC2 * pVec .* pVec;
             phaseConst = numSc * chirpC1 * delay * delay;
             twoPiOverN = 2 * pi / numSc;
@@ -52,7 +60,9 @@ classdef FractionalChannelBuilder < handle
 
             for idx = 1:numKvPts
                 dc = dCoeffs(idx);
-                if abs(dc) < 1e-15, continue; end
+                if abs(dc) < 1e-15
+                    continue;
+                end
 
                 qVec = mod(pVec + locIndex + kvRange(idx), numSc);
                 phaseArg = twoPiOverN * ( ...
@@ -71,31 +81,21 @@ classdef FractionalChannelBuilder < handle
             hPath = sparse(rowAll(1:ptr), colAll(1:ptr), valAll(1:ptr), numSc, numSc);
         end
 
-        %% ---------- 多径有效信道 ----------
-        function hEff = buildEffectiveChannel(obj, pathParams)
+        % BUILDEFFECTIVECHANNEL 将多径参数叠加得到总有效信道矩阵。
+        function effectiveChannel = buildEffectiveChannel(obj, pathParams)
             numSc = obj.Config.NumSubcarriers;
-            hEff  = sparse(numSc, numSc);
+            effectiveChannel  = sparse(numSc, numSc);
             for i = 1:size(pathParams, 1)
-                hEff = hEff + pathParams(i,3) * ...
+                effectiveChannel = effectiveChannel + pathParams(i,3) * ...
                     obj.buildPathMatrix(pathParams(i,1), pathParams(i,2));
             end
         end
 
-        %% ---------- 导频响应向量 (支持任意导频位置) ----------
+        % BUILDPILOTRESPONSEVECTOR 构造指定导频索引处的单路径响应向量。
         function hCol = buildPilotResponseVector(obj, delay, doppler, pilotIdx)
-            % buildPilotResponseVector  计算单径 H_eff 的第 pilotIdx 列
-            %
-            %   pilotIdx : 0-based DAFT 域导频索引 (默认 0, 向后兼容)
-            %
-            %   数学推导:
-            %     H_path(p, q) 中 q = mod(p + loc + kv, N), 其相位为
-            %       exp(j*2π*(c1*l² - q*l/N + c2*q² - c2*p²))
-            %     对第 pilotIdx 列 (q = pilotIdx), 对应行为
-            %       p = mod(pilotIdx - loc - kv, N)
-            %     相位变为
-            %       exp(j*2π*(c1*l² - pilotIdx*l/N + c2*pilotIdx² - c2*p²))
-
-            if nargin < 4, pilotIdx = 0; end
+            if nargin < 4
+                pilotIdx = 0;
+            end
 
             numSc    = obj.Config.NumSubcarriers;
             chirpC1  = obj.Config.ChirpParam1;
@@ -109,78 +109,77 @@ classdef FractionalChannelBuilder < handle
 
             hCol = zeros(numSc, 1);
             for kvShift = -spreadKv:spreadKv
-                pIdx     = mod(pilotIdx - locIndex - kvShift, numSc);
+                pIdx = mod(pilotIdx - locIndex - kvShift, numSc);
                 phaseVal = exp(1j * 2 * pi * (chirpC1 * delay^2 ...
                     - pilotIdx * delay / numSc ...
                     + chirpC2 * pilotIdx^2 ...
                     - chirpC2 * pIdx^2));
-                dCoeff   = FractionalChannelBuilder.computeDirichletCoeff( ...
+                dCoeff = FractionalChannelBuilder.computeDirichletCoeff( ...
                     fracPart, kvShift, numSc);
-                hCol(pIdx + 1) = phaseVal * dCoeff;
+                hCol(pIdx + 1) = hCol(pIdx + 1) + phaseVal * dCoeff;
             end
         end
 
-        %% ---------- CAZAC 多导频合成响应 ----------
+        % BUILDCOMPOSITEPILOTRESPONSE 构造包含导频幅度与序列的复合响应。
         function hComposite = buildCompositePilotResponse(obj, delay, doppler)
-            % buildCompositePilotResponse  K 个导频的相干合成响应向量
-            %
-            %   y_pilot = sum_k (A_p/sqrt(K)) * p_k * H_path(:, m_k)
-            %
-            %   K = 1 时等价于 PilotAmplitude * buildPilotResponseVector(delay, doppler, 0)
-
             localCfg = obj.Config;
-            K        = localCfg.NumPilots;
-            positions = localCfg.PilotPositions;
-            sequence = localCfg.PilotSequence;
-            ampPP    = localCfg.PerPilotAmplitude;
+            pilotResponse = obj.buildPilotResponseVector(delay, doppler, 0);
+            hComposite = localCfg.PerPilotAmplitude * localCfg.PilotSequence * pilotResponse;
+        end
 
-            hComposite = zeros(localCfg.NumSubcarriers, 1);
-            for k = 1:K
-                hk = obj.buildPilotResponseVector(delay, doppler, positions(k));
-                hComposite = hComposite + ampPP * sequence(k) * hk;
+        % APPLYPATHTOFRAME 将单路径算子作用到 DAFT 域发射帧。
+        function y = applyPathToFrame(obj, delay, doppler, txFrame)
+            y = obj.buildPathMatrix(delay, doppler) * txFrame;
+        end
+
+        % BUILDPATHRESPONSEDICTIONARY 构建多径响应字典矩阵。
+        function dict = buildPathResponseDictionary(obj, pathParams, txFrame)
+            numSc = obj.Config.NumSubcarriers;
+            numPaths = size(pathParams, 1);
+            dict = zeros(numSc, numPaths);
+            for i = 1:numPaths
+                dict(:, i) = obj.applyPathToFrame(pathParams(i,1), pathParams(i,2), txFrame);
             end
         end
 
-        %% ---------- 随机信道实现 ----------
-        function [pathParams, hEff] = generateChannel(obj)
-            localCfg      = obj.Config;
-            numPaths  = localCfg.NumPaths;
-            maxDelay  = localCfg.MaxDelaySpread;
-            maxDopIdx = localCfg.MaxDopplerIndex;
+        % BUILDDOPPLERBASIS 构造给定整数 Doppler 邻域的基函数集合。
+        function [basisVecs, kvRange] = buildDopplerBasis(obj, delay, intDoppler, txFrame)
+            numSc    = obj.Config.NumSubcarriers;
+            spreadKv = obj.Config.SpreadWidth;
+            chirpC1  = obj.Config.ChirpParam1;
+            chirpC2  = obj.Config.ChirpParam2;
 
-            allDelays      = 0:maxDelay;
-            selectedDelays = allDelays(randperm(length(allDelays), numPaths))';
-            randomPhases   = -pi + 2 * pi * rand(numPaths, 1);
-            dopplerShifts  = maxDopIdx * cos(randomPhases);
+            kvRange = (-spreadKv:spreadKv).';
+            numKv = length(kvRange);
 
-            if ~localCfg.UseFractionalDoppler
-                dopplerShifts = round(dopplerShifts);
+            pVec = (0:numSc-1).';
+            alphaInt = intDoppler;
+            locStep = round(2 * numSc * chirpC1);
+            locIndex = alphaInt + locStep * delay;
+            phaseConst = numSc * chirpC1 * delay^2;
+            c2PSq = chirpC2 * pVec .* pVec;
+            twoPiOverN = 2 * pi / numSc;
+
+            basisVecs = zeros(numSc, numKv);
+            for idx = 1:numKv
+                qVec = mod(pVec + locIndex + kvRange(idx), numSc);
+                phaseArg = twoPiOverN * (phaseConst - qVec * delay ...
+                    + numSc * chirpC2 * (qVec .* qVec) - numSc * c2PSq);
+                basisVecs(:, idx) = exp(1j * phaseArg) .* txFrame(qVec + 1);
             end
+        end
 
-            for p = 2:numPaths
-                attempts = 0;
-                while any(selectedDelays(1:p-1) == selectedDelays(p) & ...
-                        round(dopplerShifts(1:p-1)) == round(dopplerShifts(p)))
-                    randomPhases(p)  = -pi + 2 * pi * rand();
-                    dopplerShifts(p) = maxDopIdx * cos(randomPhases(p));
-                    if ~localCfg.UseFractionalDoppler
-                        dopplerShifts(p) = round(dopplerShifts(p));
-                    end
-                    attempts = attempts + 1;
-                    if attempts > 100, break; end
-                end
-            end
-
-            complexGains = sqrt(1 / (2 * numPaths)) * ...
-                (randn(numPaths, 1) + 1j * randn(numPaths, 1));
-            pathParams = [selectedDelays, dopplerShifts, complexGains];
-            hEff       = obj.buildEffectiveChannel(pathParams);
+        % COMPUTEDIRICHLETWITHDERIV 计算 Dirichlet 系数及其对分数偏移的一阶导数。
+        function [dVal, dDeriv] = computeDirichletWithDeriv(~, fracPart, shiftIndex, numSc)
+            [dVal, dDeriv] = FractionalChannelBuilder.dirichletWithDeriv( ...
+                fracPart, shiftIndex, numSc);
         end
 
     end
 
     methods (Static)
 
+        % COMPUTEDIRICHLETCOEFF 计算分数 Doppler 下的 Dirichlet 系数。
         function dVal = computeDirichletCoeff(fracPart, shiftIndex, numSc)
             xVal = fracPart - shiftIndex;
             if abs(xVal) < 1e-12
@@ -193,12 +192,14 @@ classdef FractionalChannelBuilder < handle
             end
         end
 
+        % DIRICHLETWITHDERIV 计算 Dirichlet 系数及其导数（含数值稳定分支）。
         function [dVal, dDeriv] = dirichletWithDeriv(fracPart, shiftIndex, numSc)
             xVal = fracPart - shiftIndex;
 
             if abs(xVal) < 1e-10
                 if abs(fracPart) < 1e-10
-                    dVal = 1; dDeriv = 0;
+                    dVal = 1;
+                    dDeriv = 0;
                 else
                     dVal = 1;
                     h  = 1e-7;
@@ -207,20 +208,23 @@ classdef FractionalChannelBuilder < handle
                     dDeriv = (dp - dm) / (2*h);
                 end
             elseif abs(fracPart) < 1e-10
-                dVal   = 0;
-                expB   = exp(-1j * 2 * pi * (-shiftIndex) / numSc);
+                dVal = 0;
+                expB = exp(-1j * 2 * pi * (-shiftIndex) / numSc);
                 dDeriv = (1 / numSc) * (1j * 2 * pi) / (1 - expB);
             else
                 expA = exp(-1j * 2 * pi * fracPart);
                 expB = exp(-1j * 2 * pi * xVal / numSc);
-                A = 1 - expA;  B = 1 - expB;
-                dVal   = (1 / numSc) * A / B;
-                Ap     = 1j * 2 * pi * expA;
-                Bp     = (1j * 2 * pi / numSc) * expB;
-                dDeriv = (1 / numSc) * (Ap * B - A * Bp) / (B * B);
+                numeratorTerm = 1 - expA;
+                denominatorTerm = 1 - expB;
+                dVal = (1 / numSc) * numeratorTerm / denominatorTerm;
+                numeratorDerivative = 1j * 2 * pi * expA;
+                denominatorDerivative = (1j * 2 * pi / numSc) * expB;
+                dDeriv = (1 / numSc) * (numeratorDerivative * denominatorTerm - numeratorTerm * denominatorDerivative) / (denominatorTerm * denominatorTerm);
             end
         end
 
     end
 
 end
+
+

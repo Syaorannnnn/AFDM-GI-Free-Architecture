@@ -1,5 +1,7 @@
 classdef AgileC2Optimizer
-    % AgileC2Optimizer  Agile-AFDM c2 敏捷优化器 (三模式向量化版)
+% ARCHIVED: Agile-c2 当前不在活动主线中使用，文件仅保留作后续复用参考。
+% AGILEC2OPTIMIZER - Agile c2 候选搜索与选择策略集合
+%   AgileC2Optimizer  Agile-AFDM c2 敏捷优化器 (三模式向量化版)
     %
     %   三种选择模式:
     %
@@ -32,9 +34,13 @@ classdef AgileC2Optimizer
     %
     %   向量化:
     %     所有模式均使用 N×Q 矩阵批量 IFFT, 不含循环.
+    %
+    %   版本历史:
+    %   2026-04-01 - Aiden - 注释规范化。
 
     methods (Static)
 
+        % GENERATECANDIDATES 生成一个周期内等间距 c2 候选集合。
         function candidates = generateCandidates(N, Q)
             % generateCandidates  生成 Q 个等间距 c2 候选值
             %   c2_q = 1/(2N²π) + q/(Q·N),  q = 0,...,Q-1
@@ -45,6 +51,7 @@ classdef AgileC2Optimizer
         end
 
         %% ============ 模式 1: 标准 PAPR ============
+        % SELECTFORBLOCK 按标准 PAPR 准则选择最优 c2。
         function [bestC2, bestIdx, allPapr] = selectForBlock(daftFrame, candidates)
             % selectForBlock  标准 PAPR 度量 (向量化批量 IFFT)
             %
@@ -69,6 +76,7 @@ classdef AgileC2Optimizer
         end
 
         %% ============ 模式 2: 导频感知交叉项度量 ============
+        % SELECTPILOTAWARE 按导频感知交叉项度量选择最优 c2。
         function [bestC2, bestIdx, allDelta] = selectPilotAware(daftFrame, candidates, pilotAmp)
             % selectPilotAware  导频感知度量 (向量化批量 IFFT)
             %
@@ -117,6 +125,7 @@ classdef AgileC2Optimizer
         end
 
         %% ============ 模式 3: 两阶段层级搜索 ============
+        % SELECTHIERARCHICAL 采用“粗搜+精搜”层级策略选择最优 c2。
         function [bestC2, bestIdx, info] = selectHierarchical(daftFrame, candidates)
             % selectHierarchical  两阶段层级搜索
             %
@@ -155,3 +164,4 @@ classdef AgileC2Optimizer
     end
 
 end
+
