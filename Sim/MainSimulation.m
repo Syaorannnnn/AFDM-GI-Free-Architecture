@@ -78,7 +78,6 @@ cfgAfdm.MaxDopplerIdx   = maxDopplerIdx;
 cfgAfdm.DopplerGuard     = dopplerGuard1;
 cfgAfdm.NumPaths         = defaultPaths;
 cfgAfdm.PilotSnrDb         = pilotSnrEp;
-cfgAfdm.WaveformType     = "AFDM";
 cfgAfdm.MaxDelaySamples    = maxDelay;
 cfgAfdm.TotalSubcarriers = numSc + maxDelay;   % 最后赋值触发 updateDerivedParams
 sysAfdm = EpSystem(cfgAfdm);
@@ -104,7 +103,7 @@ fprintf('  OFDM   SE: %.3f bps/Hz  (数据载波 %d / 帧长 %d, 导频 %d 个, 
     cfgOfdm.NumPilots, cfgOfdm.PilotSpacing);
 fprintf('\n');
 
-nTrials1       = 1e2;
+nTrials1       = 1e3;
 berAfdmEstVec  = zeros(numSnr, 1);
 berAfdmPcsiVec = zeros(numSnr, 1);
 berOfdmEstVec  = zeros(numSnr, 1);
@@ -192,7 +191,7 @@ cfgGf3a.MaxDelaySamples       = maxDelay;
 cfgGf3a.MaxDopplerIdx      = maxDopplerIdx;
 cfgGf3a.NumPaths             = 5;
 cfgGf3a.DopplerGuard         = dopplerGuard3;
-cfgGf3a.SpreadWidth          = 0;
+cfgGf3a.DirichletRadius      = 0;
 cfgGf3a.PilotSnrDb           = pilotSnrGf;
 cfgGf3a.MaxSicIterations     = 10;
 cfgGf3a.NumPathsUpper        = 7;
@@ -215,7 +214,7 @@ snrLin3    = 10^(snrDb3/10);
 paperThr   = 3 * sqrt(1 + snrLin3);      % 论文 eq.(17)
 ompReg     = (nData3a/numSc) * snrLin3 / pilotAmp^2;
 lmmseReg   = 1 / snrLin3;
-nTrials3a  = 300;
+nTrials3a  = 5e2;
 pathCounts = 1:5;
 
 % 统计量 [5 x 3]（论文首检、论文迭代、CFAR）
@@ -366,7 +365,7 @@ cfgInt.MaxDelaySamples       = maxDelay;
 cfgInt.MaxDopplerIdx      = maxDopplerIdx;
 cfgInt.NumPaths             = defaultPaths;
 cfgInt.DopplerGuard         = dopplerGuard3;
-cfgInt.SpreadWidth          = 0;        % 涓嶅缓妯?Dirichlet 鎵╁睍
+cfgInt.DirichletRadius      = 0;        % 不建模 Dirichlet 半展宽
 cfgInt.PilotSnrDb           = pilotSnrGf;
 cfgInt.MaxSicIterations     = 10;
 cfgInt.NumPathsUpper        = 6;
@@ -384,7 +383,7 @@ cfgFracBase.MaxDelaySamples      = maxDelay;
 cfgFracBase.MaxDopplerIdx        = maxDopplerIdx;
 cfgFracBase.NumPaths             = defaultPaths;
 cfgFracBase.DopplerGuard         = dopplerGuard3;
-cfgFracBase.SpreadWidth          = 4;       % 原始分数 Doppler 接收机
+cfgFracBase.DirichletRadius      = 4;       % 原始分数 Doppler 接收机
 cfgFracBase.PilotSnrDb           = pilotSnrGf;
 cfgFracBase.MaxSicIterations     = 10;
 cfgFracBase.NumPathsUpper        = 6;
@@ -401,19 +400,19 @@ cfgFrac.MaxDelaySamples      = maxDelay;
 cfgFrac.MaxDopplerIdx        = maxDopplerIdx;
 cfgFrac.NumPaths             = defaultPaths;
 cfgFrac.DopplerGuard         = dopplerGuard3;
-cfgFrac.SpreadWidth          = 4;       % Dirichlet 核建模 + T1P 接收机优化
+cfgFrac.DirichletRadius      = 4;       % Dirichlet 核建模 + T1P 接收机优化
 cfgFrac.PilotSnrDb           = pilotSnrGf;
 cfgFrac.MaxSicIterations     = 10;
 cfgFrac.NumPathsUpper        = 6;
 cfgFrac.UseFractionalDoppler = true;
-cfgFrac.UseDynamicPilot          = true;
-cfgFrac.DynamicPilotBaseDb       = 35;
+cfgFrac.UseDynamicPilot          = false;  % 固定导频模式（回退决策）
+cfgFrac.DynamicPilotBaseDb       = 35;     % 备用参数（动态模式禁用时无效）
 cfgFrac.EnableProgressiveCfar    = true;
 cfgFrac.ProgressiveCfarInitScale = 3.0;
 cfgFrac.ProgressiveCfarFinalScale = 1.0;
 cfgFrac.EnablePathStabilityGate  = true;
 cfgFrac.PathStabilityThreshold   = 2;
-sysFrac = GiFreeSystem(cfgFrac);
+sysFrac = GiFreeSystem(cfgFrac);  % GI-Free 固定导频 + T1P 接收机（推荐配置）
 
 % ---- EP 基准线：分数 Doppler 下不同保护带 ----
 xiNuVec = [1, 2, 4];
@@ -429,14 +428,13 @@ for xi = 1:nXiNu
     cfgEp.DopplerGuard     = xiNuVec(xi);
     cfgEp.NumPaths         = defaultPaths;
     cfgEp.PilotSnrDb         = pilotSnrEp;
-    cfgEp.WaveformType     = "AFDM";
     cfgEp.MaxDelaySamples    = maxDelay;
     cfgEp.TotalSubcarriers = numSc + maxDelay;
     sysEp3b{xi} = EpSystem(cfgEp);
     seEp3b(xi)  = cfgEp.NumActiveCarriers * bps / cfgEp.NumDataSubcarriers;
 end
 
-nTrials3b = 80;
+nTrials3b = 5e2;
 berInt  = zeros(numSnr,1);  berFracBase  = zeros(numSnr,1);  berFrac  = zeros(numSnr,1);
 berPcsi3b = zeros(numSnr,1);
 nmseInt = zeros(numSnr,1);  nmseFracBase = zeros(numSnr,1);  nmseFrac = zeros(numSnr,1);
@@ -468,14 +466,17 @@ for si = 1:numSnr
     errEp3b = zeros(1, nXiNu); bitsEp3b = zeros(1, nXiNu);
 
     for tr = 1:nTrials3b
-        % 共享信号：分数 Doppler 信道，T1P 与旧版 FracRx 共用同一组数据索引。
+        % 共享信道参数：GI-Free 与 EP 使用相同的 [delay, doppler, gain]
         trialRngState = rng;
         [txFrame, txIdx] = transmitWithFixedSeed(sysFrac, snrLin, trialRngState);
         [txFrameBase, txIdxBase] = transmitWithFixedSeed(sysFracBase, snrLin, trialRngState);
         if cfgInt.UseDynamicPilot
             cfgInt.CurrentDataSnrLin = snrLin;
         end
-        [~, trueH] = sysFrac.ChannelSampler.sampleChannel();
+        [pathParams, trueH] = sysFrac.ChannelSampler.sampleChannel();
+        dlShared = pathParams(:, 1);
+        dpShared = pathParams(:, 2);
+        gnShared = pathParams(:, 3);
         noise = sqrt(0.5) * (randn(numSc,1) + 1j*randn(numSc,1));
         rxSig = trueH * txFrame + noise;
         rxSigBase = trueH * txFrameBase + noise;
@@ -493,10 +494,9 @@ for si = 1:numSnr
         % Perfect CSI
         detP = GiFreeSystem.perfectCsiDetect(rxSig, trueH, snrLin, 1, cfgFrac);
 
-        % EP 基准线（独立信道实现，同统计参数）
-        [dlEp, dpEp, gnEp] = generateRandomChannel(defaultPaths, maxDelay, maxDopplerIdx, true);
+        % EP 基准线（使用共享信道参数，实现严格公平对比）
         for xi = 1:nXiNu
-            rEp = sysEp3b{xi}.runTrial(snrVec(si), dlEp, dpEp, gnEp);
+            rEp = sysEp3b{xi}.runTrial(snrVec(si), dlShared, dpShared, gnShared);
             errEp3b(xi)  = errEp3b(xi)  + rEp.bitErrors;
             bitsEp3b(xi) = bitsEp3b(xi) + rEp.totalBits;
         end
@@ -568,6 +568,7 @@ semilogy(snrVec, berPcsi3b, '--s', 'Color', cBlack, ...
     'LineWidth', 1.5, 'MarkerSize', 6, ...
     'DisplayName', 'Perfect CSI');
 applyIeeeStyle(gca);
+set(gca, 'YScale', 'log');
 ylim([1e-4 1]);
 xlabel('Data SNR (dB)'); ylabel('BER');
 title('(a) BER vs SNR');
