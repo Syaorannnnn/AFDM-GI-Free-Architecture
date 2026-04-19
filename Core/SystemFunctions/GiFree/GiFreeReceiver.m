@@ -1,11 +1,11 @@
 classdef GiFreeReceiver < handle
-% GIFREERECEIVER - CLTP 三阶段接收处理主流程
+% GIFREERECEIVER - CLIP 三阶段接收处理主流程
 %
 %   描述:
-%   实现 GI-Free 接收端 CLTP 流程：
-%   1) IAI: 干扰感知初始化（OMP + LMMSE + 置信门控）
-%   2) DDR: 数据导向精炼（Doppler/增益精炼 + 残差注入）
-%   3) DFP: 判决反馈后处理（可选）
+%   实现 GI-Free 接收端 CLIP 流程：
+%   1) 粗锁定阶段: 干扰感知初始化（OMP + LMMSE + 置信门控）
+%   2) 迭代精炼阶段: 数据导向精炼（Doppler/增益精炼 + 残差注入）
+%   3) 最终定型阶段: 判决反馈后处理（可选）
 %
 %   语法:
 %   receiverObj = GiFreeReceiver(cfg, estimator);
@@ -38,7 +38,7 @@ classdef GiFreeReceiver < handle
             obj.Estimator = estimator;
         end
 
-        % RECEIVE 执行 CLTP 接收链路并输出检测结果与信道估计误差。
+        % RECEIVE 执行 CLIP 接收链路并输出检测结果与信道估计误差。
         function [detectedIndices, normalizedMse, estEffChannel, rxDiag] = receive( ...
                 obj, rxSignal, trueEffChannel, dataSnrLin, noisePowerLin)
 
@@ -81,7 +81,7 @@ classdef GiFreeReceiver < handle
             rxDiag.phase2IterationBudget = numPhase2;
             rxDiag.postDecisionIterationBudget = numPostDecision;
 
-            if obj.Config.EnablePhase0Bootstrap && obj.Config.SpreadWidth > 0
+            if obj.Config.EnablePhase0Bootstrap && obj.Config.DirichletRadius > 0
                 [phase1InputSignal, ~, bootstrapDiag] = obj.bootstrapPhase0( ...
                     rxSignal, ompRegParam, regParam, ...
                     numSc, dataPos1, scaledConstellation, effectiveNoisePower, pilotFrame);
@@ -140,7 +140,7 @@ classdef GiFreeReceiver < handle
 
                 prevPaths = estPaths;
                 searchMode = GiFreeReceiver.selectPhase1OmpMode( ...
-                    baseSearchMode, obj.Config.BeamStrategyMode, obj.Config.SpreadWidth, ...
+                    baseSearchMode, obj.Config.BeamStrategyMode, obj.Config.DirichletRadius, ...
                     obj.Config.BeamAdaptiveSpreadThreshold, obj.Config.BeamAdaptiveImproveRatio, ...
                     iter, prevOmpDiag, lastOmpDiag, lastOmpSupportChanged);
                 [estPaths, effectiveChannel, ompDiag] = obj.Estimator.estimateByOmp( ...
@@ -173,7 +173,7 @@ classdef GiFreeReceiver < handle
             % 后续每轮迭代由 trimmedNoisePower 更新：H 越差残差越大，下界越高，
             % 软判决越保守，从而形成自校正的负反馈机制，抑制高 SNR 下的 Turbo 发散。
             softDecNoiseFloor = effectiveNoisePower;
-            % NOTE: DDR 阶段交替执行支撑更新与数据导向精炼。
+            % NOTE: 迭代精炼阶段交替执行支撑更新与数据导向精炼。
             for iter = 1:numPhase2
                 rawDataEst     = estFullSig(dataPos1);
                 outputNoiseVar = GiFreeReceiver.selectOutputNoiseVar( ...
@@ -214,7 +214,7 @@ classdef GiFreeReceiver < handle
 
                 txFramePower = real(txFrameEst' * txFrameEst) / numSc;
                 ddRegParam   = max(noisePowerLin / txFramePower, 1e-6);
-                useDopplerRefine = obj.Config.SpreadWidth > 0 && ...
+                useDopplerRefine = obj.Config.DirichletRadius > 0 && ...
                     (iter == 1 || supportChanged || stagnationCount >= 1 || mod(iter, 2) == 1);
 
                 if useDopplerRefine
@@ -341,6 +341,22 @@ classdef GiFreeReceiver < handle
             estEffChannel     = effectiveChannel;
             normalizedMse     = norm(full(effectiveChannel) - full(trueEffChannel), 'fro')^2 / ...
                 max(norm(full(trueEffChannel), 'fro')^2, 1e-20);
+
+            % 填充数据检测诊断字段
+            rxDiag.regParamFinal = regParam;
+            txFrameEst = GiFreeReceiver.buildTxFrame( ...
+                numSc, pilotPos1, dataPos1, ampPP, pilotSeq, estFullSig(dataPos1));
+            dataResidual = rxSignal - effectiveChannel * txFrameEst;
+            rxDiag.dataResidualPower = real(dataResidual' * dataResidual) / numSc;
+            rxDiag.pilotDataPowerRatio = pilotAmpTot^2 / dataSnrLin;
+            [~, finalConfidence] = GiFreeReceiver.computeFeedbackSymbols( ...
+                estFullSig(dataPos1), scaledConstellation, noisePowerLin, obj.Config.FeedbackMode);
+            rxDiag.symbolConfidenceMean = mean(finalConfidence);
+            rxDiag.symbolConfidenceStd = std(finalConfidence);
+            % 导频消除残差诊断
+            pilotResidual = rxSignal - effectiveChannel * pilotFrame;
+            rxDiag.pilotResidualPower = real(pilotResidual' * pilotResidual) / numSc;
+            rxDiag.pilotCancellationErrorNorm = rxDiag.pilotResidualPower / pilotAmpTot^2;
         end
 
     end
@@ -350,10 +366,10 @@ classdef GiFreeReceiver < handle
         function [cleanedSignal, intPaths, bootstrapDiag] = bootstrapPhase0( ...
                 obj, rxSignal, ompRegParam, regParam, ...
                 numSc, dataPos1, scaledConstellation, effectiveNoisePower, pilotFrame)
-            originalSpreadWidth = obj.Config.SpreadWidth;
-            cleanupObj = onCleanup(@() GiFreeReceiver.restoreSpreadWidth( ...
-                obj.Config, originalSpreadWidth));
-            obj.Config.SpreadWidth = 0;
+            originalDirichletRadius = obj.Config.DirichletRadius;
+            cleanupObj = onCleanup(@() GiFreeReceiver.restoreDirichletRadius( ...
+                obj.Config, originalDirichletRadius));
+            obj.Config.DirichletRadius = 0;
 
             [intPathsRaw, ~, intOmpDiag] = obj.Estimator.estimateByOmp( ...
                 rxSignal, ompRegParam, ones(numSc, 1), 'greedy');
@@ -362,7 +378,7 @@ classdef GiFreeReceiver < handle
                 intPathsRaw, intOmpDiag.weightedResidualNormPerDepth, ...
                 obj.Config.MaxBootstrapPaths, obj.Config.BootstrapImproveRatioThreshold);
 
-            obj.Config.SpreadWidth = originalSpreadWidth;
+            obj.Config.DirichletRadius = originalDirichletRadius;
 
             if isempty(intPaths)
                 intChannel = sparse(numSc, numSc);
@@ -416,7 +432,7 @@ classdef GiFreeReceiver < handle
             localRefineAccepted = false;
             localRefineResGain = 1.0;
 
-            if ~obj.Config.EnablePhase0LocalRefine || isempty(intPaths) || obj.Config.SpreadWidth == 0
+            if ~obj.Config.EnablePhase0LocalRefine || isempty(intPaths) || obj.Config.DirichletRadius == 0
                 return;
             end
 
@@ -450,7 +466,7 @@ classdef GiFreeReceiver < handle
 
     methods (Static)
 
-        % CREATEEMPTYRXDIAG 构造字段完整的接收机诊断结构体。
+        % CREATEEMPTYRXDIAG 构造字段完整的接收机诊断结构体（含数据检测诊断）。
         function rxDiag = createEmptyRxDiag()
             rxDiag = struct( ...
                 'phase1SupportChangeCount', 0, ...
@@ -465,7 +481,14 @@ classdef GiFreeReceiver < handle
                 'postDecisionIterationBudget', 0, ...
                 'ompCallCount', 0, ...
                 'beamCallCount', 0, ...
-                'bootstrapDiag', []);
+                'bootstrapDiag', [], ...
+                'regParamFinal', 0, ...
+                'dataResidualPower', 0, ...
+                'pilotDataPowerRatio', 0, ...
+                'symbolConfidenceMean', 0, ...
+                'symbolConfidenceStd', 0, ...
+                'pilotResidualPower', 0, ...
+                'pilotCancellationErrorNorm', 0);
         end
 
         % UPDATEOMPCOUNTERS 统计接收机内部 OMP 总调用次数与 Beam 次数。
@@ -628,7 +651,7 @@ classdef GiFreeReceiver < handle
             end
         end
 
-        % SPLITPHASEBUDGET 按总迭代轮次分配 IAI/DDR/DFP 预算。
+        % SPLITPHASEBUDGET 按总迭代轮次分配粗锁定/迭代精炼/最终定型阶段预算。
         function [numPhase1, numPhase2, numPostDecision] = splitPhaseBudget( ...
                 totalIter, enableDfp, prioritizePhase1Budget)
             if nargin < 3
@@ -824,8 +847,8 @@ classdef GiFreeReceiver < handle
             end
         end
 
-        function restoreSpreadWidth(cfg, spreadWidth)
-            cfg.SpreadWidth = spreadWidth;
+        function restoreDirichletRadius(cfg, dirichletRadius)
+            cfg.DirichletRadius = dirichletRadius;
         end
 
         function [prunedPaths, improveRatioVec] = pruneBootstrapPathsByResidual( ...

@@ -31,14 +31,14 @@ classdef FractionalChannelBuilder < IChannelOperator
             numSc    = obj.Config.NumSubcarriers;
             chirpC1  = obj.Config.ChirpParam1;
             chirpC2  = obj.Config.ChirpParam2;
-            spreadKv = obj.Config.SpreadWidth;
+            dirichletRadius = obj.Config.DirichletRadius;
 
             alphaInt = round(doppler);
             fracPart = doppler - alphaInt;
             locStep  = round(2 * numSc * chirpC1);
             locIndex = alphaInt + locStep * delay;
 
-            kvRange  = -spreadKv:spreadKv;
+            kvRange  = -dirichletRadius:dirichletRadius;
             numKvPts = length(kvRange);
 
             dCoeffs = zeros(numKvPts, 1);
@@ -100,7 +100,7 @@ classdef FractionalChannelBuilder < IChannelOperator
             numSc    = obj.Config.NumSubcarriers;
             chirpC1  = obj.Config.ChirpParam1;
             chirpC2  = obj.Config.ChirpParam2;
-            spreadKv = obj.Config.SpreadWidth;
+            dirichletRadius = obj.Config.DirichletRadius;
 
             alphaInt = round(doppler);
             fracPart = doppler - alphaInt;
@@ -108,7 +108,7 @@ classdef FractionalChannelBuilder < IChannelOperator
             locIndex = alphaInt + locStep * delay;
 
             hCol = zeros(numSc, 1);
-            for kvShift = -spreadKv:spreadKv
+            for kvShift = -dirichletRadius:dirichletRadius
                 pIdx = mod(pilotIdx - locIndex - kvShift, numSc);
                 phaseVal = exp(1j * 2 * pi * (chirpC1 * delay^2 ...
                     - pilotIdx * delay / numSc ...
@@ -145,11 +145,11 @@ classdef FractionalChannelBuilder < IChannelOperator
         % BUILDDOPPLERBASIS 构造给定整数 Doppler 邻域的基函数集合。
         function [basisVecs, kvRange] = buildDopplerBasis(obj, delay, intDoppler, txFrame)
             numSc    = obj.Config.NumSubcarriers;
-            spreadKv = obj.Config.SpreadWidth;
+            dirichletRadius = obj.Config.DirichletRadius;
             chirpC1  = obj.Config.ChirpParam1;
             chirpC2  = obj.Config.ChirpParam2;
 
-            kvRange = (-spreadKv:spreadKv).';
+            kvRange = (-dirichletRadius:dirichletRadius).';
             numKv = length(kvRange);
 
             pVec = (0:numSc-1).';

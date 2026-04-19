@@ -26,7 +26,7 @@ classdef GiFreeConfig < handle
         MaxDopplerIdx
         NumPaths
         DopplerGuard
-        SpreadWidth
+        DirichletRadius      % Dirichlet 核在 Doppler 维的半展宽
         PilotSnrDb
         MaxSicIterations
         NumPathsUpper
@@ -68,6 +68,8 @@ classdef GiFreeConfig < handle
         UseDynamicPilot = false
         DynamicPilotBaseDb = 35   % 动态模式下固定的 pilot/noise 比 (dB)
         CurrentDataSnrLin = 1     % 当前 trial 的数据 SNR 线性值（由 GiFreeSystem 外部设置）
+        EnableCfarPilotPowerNormalization = false
+        CfarPilotPowerCapDb = 45   % CFAR 门限参考导频功率上限 (dB)
     end
 
     properties (Dependent)
@@ -83,6 +85,7 @@ classdef GiFreeConfig < handle
         NumDataSymbols
         PilotSequence
         PerPilotAmplitude
+        SpreadWidth
 
         MaxDelaySpread
         MaxDopplerIndex
@@ -118,6 +121,16 @@ classdef GiFreeConfig < handle
         function val = get.DataPositions(obj)
             GiFreeConfig.warnDeprecatedAlias('DataPositions', 'DataPos0');
             val = obj.DataPos0;
+        end
+
+        function set.SpreadWidth(obj, val)
+            GiFreeConfig.warnDeprecatedAlias('SpreadWidth', 'DirichletRadius');
+            obj.DirichletRadius = val;
+        end
+
+        function val = get.SpreadWidth(obj)
+            GiFreeConfig.warnDeprecatedAlias('SpreadWidth', 'DirichletRadius');
+            val = obj.DirichletRadius;
         end
 
         % VALIDATE 校验 Theorem-1 相关正交约束是否满足。

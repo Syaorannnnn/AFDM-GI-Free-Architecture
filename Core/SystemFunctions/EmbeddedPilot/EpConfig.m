@@ -6,7 +6,6 @@ classdef EpConfig < handle
     properties (Access = public)
         BitsPerSymbol
         ModulationOrder
-        WaveformType
 
         TotalSubcarriers
         MaxDelaySamples

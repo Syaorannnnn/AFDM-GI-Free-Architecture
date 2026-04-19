@@ -11,9 +11,10 @@ AGENTS.md
 .claude/
 .matlab_prefs/
 .matlab_prefs_tiercheckpoint/
+.matlab_prefs_codex/
 thesis/
 docs/
 Sim/Results/
-Sim/Archive
-Sim/Tests
+Sim/Archive/
+Sim/Tests/
 tools/

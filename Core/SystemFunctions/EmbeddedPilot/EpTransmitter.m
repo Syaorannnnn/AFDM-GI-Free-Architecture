@@ -25,12 +25,8 @@ classdef EpTransmitter < handle
             daftFrame(obj.Config.PilotPos1) = sqrt(pilotPowerLin);
             daftFrame(obj.Config.DataPos1) = qamSymbols;
 
-            if strcmpi(obj.Config.WaveformType, "AFDM")
-                timeFrame = AfdmTransforms.idaft(daftFrame, ...
-                    obj.Config.ChirpParam1, obj.Config.ChirpParam2);
-            else
-                timeFrame = AfdmTransforms.idft(daftFrame);
-            end
+            timeFrame = AfdmTransforms.idaft(daftFrame, ...
+                obj.Config.ChirpParam1, obj.Config.ChirpParam2);
 
             txSignal = obj.addPrefix(timeFrame);
         end
@@ -44,13 +40,9 @@ classdef EpTransmitter < handle
             prefixLen = obj.Config.PrefixLength;
             numDataSubcarriers = obj.Config.NumDataSubcarriers;
 
-            if strcmpi(obj.Config.WaveformType, "AFDM")
-                phaseVec = exp(-1j * 2 * pi * obj.Config.ChirpParam1 * ...
-                    (numDataSubcarriers ^ 2 + 2 * numDataSubcarriers * (-prefixLen:-1).'));
-                prefix = timeFrame(end - prefixLen + 1:end) .* phaseVec;
-            else
-                prefix = timeFrame(end - prefixLen + 1:end);
-            end
+            phaseVec = exp(-1j * 2 * pi * obj.Config.ChirpParam1 * ...
+                (numDataSubcarriers ^ 2 + 2 * numDataSubcarriers * (-prefixLen:-1).'));
+            prefix = timeFrame(end - prefixLen + 1:end) .* phaseVec;
 
             txSignal = [prefix; timeFrame];
         end

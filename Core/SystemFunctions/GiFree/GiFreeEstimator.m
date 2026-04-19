@@ -77,10 +77,6 @@ classdef GiFreeEstimator < handle
 
             numSubcarriers = obj.Config.NumSubcarriers;
             numPathsUpper  = obj.Config.NumPathsUpper;
-            numCandidates = (obj.Config.MaxDelaySamples + 1) * ...
-                            (2 * obj.Config.MaxDopplerIdx + 1);
-            cfarCoeff = log(numCandidates / obj.cfarFalseAlarmProb);
-            pilotAmpSq = obj.Config.PilotAmplitude^2;
             fracRefineCallCount = 0;
             ompDiag = obj.createEmptyOmpDiag(modeLabel);
 
@@ -111,15 +107,14 @@ classdef GiFreeEstimator < handle
                 [peakHit, peakMetric] = obj.findStrongestPeakExcluding(residual, estPaths, observationWeights);
 
                 weightedResidual = sqrt(observationWeights) .* residual;
-                residualPower = real(weightedResidual' * weightedResidual) / numSubcarriers;
-                threshold = residualPower * pilotAmpSq * cfarCoeff;
+                threshold = obj.computeCfarThreshold(weightedResidual, numSubcarriers, 1.0);
                 if isempty(peakHit) || peakMetric < threshold
                     break;
                 end
 
                 delayVal = peakHit(1);
                 dopplerIdx = peakHit(2);
-                if obj.Config.SpreadWidth == 0
+                if obj.Config.DirichletRadius == 0
                     fracDoppler = dopplerIdx;
                 else
                     fracDoppler = obj.refineFractionalDoppler(residual, delayVal, dopplerIdx);
@@ -163,10 +158,6 @@ classdef GiFreeEstimator < handle
             expandFactor = max(round(obj.Config.BeamExpandFactor), 1);
             probeExpandWidth = probeBeamWidth * expandFactor;
             numSubcarriers = obj.Config.NumSubcarriers;
-            numCandidates = (obj.Config.MaxDelaySamples + 1) * ...
-                            (2 * obj.Config.MaxDopplerIdx + 1);
-            cfarCoeff = log(numCandidates / obj.cfarFalseAlarmProb);
-            pilotAmpSq = obj.Config.PilotAmplitude^2;
             minImproveRatio = max(obj.Config.BeamMinImproveRatio, 0);
             adaptiveImproveRatio = max(obj.Config.BeamAdaptiveImproveRatio, 0);
             adaptiveSpreadThreshold = max(round(obj.Config.BeamAdaptiveSpreadThreshold), 0);
@@ -189,8 +180,7 @@ classdef GiFreeEstimator < handle
                 for stateIdx = 1:numel(beamStates)
                     state = beamStates(stateIdx);
                     weightedResidual = sqrt(observationWeights) .* state.residual;
-                    residualPower = real(weightedResidual' * weightedResidual) / numSubcarriers;
-                    threshold = residualPower * pilotAmpSq * cfarCoeff;
+                    threshold = obj.computeCfarThreshold(weightedResidual, numSubcarriers, 1.0);
 
                     [candidateList, ~] = obj.selectTopCandidates( ...
                         state.residual, state.supportPaths, observationWeights, probeExpandWidth, threshold);
@@ -218,7 +208,7 @@ classdef GiFreeEstimator < handle
                     state = beamStates(selectedProposalTable(proposalIdx, 1));
                     delayVal = selectedProposalTable(proposalIdx, 2);
                     dopplerIdx = selectedProposalTable(proposalIdx, 3);
-                    if obj.Config.SpreadWidth == 0
+                    if obj.Config.DirichletRadius == 0
                         fracDoppler = dopplerIdx;
                     else
                         fracDoppler = obj.refineFractionalDoppler(state.residual, delayVal, dopplerIdx);
@@ -338,10 +328,10 @@ classdef GiFreeEstimator < handle
             end
 
             numSc = obj.Config.NumSubcarriers;
-            spreadKv = obj.Config.SpreadWidth;
+            dirichletRadius = obj.Config.DirichletRadius;
             numPaths = size(estPaths, 1);
 
-            if numPaths == 0 || spreadKv == 0
+            if numPaths == 0 || dirichletRadius == 0
                 refinedPaths = estPaths;
                 hEffective = obj.ChannelBuilder.buildEffectiveChannel(estPaths);
                 return;
@@ -465,14 +455,8 @@ classdef GiFreeEstimator < handle
             end
 
             numSubcarriers = obj.Config.NumSubcarriers;
-            numCandidates = (obj.Config.MaxDelaySamples + 1) * ...
-                (2 * obj.Config.MaxDopplerIdx + 1);
-            cfarCoeff = log(numCandidates / obj.cfarFalseAlarmProb);
-            pilotAmpSq = obj.Config.PilotAmplitude^2;
-
             weightedResidual = sqrt(observationWeights) .* residualSignal;
-            residualPower = real(weightedResidual' * weightedResidual) / numSubcarriers;
-            threshold = residualPower * pilotAmpSq * cfarCoeff * thresholdScale;
+            threshold = obj.computeCfarThreshold(weightedResidual, numSubcarriers, thresholdScale);
 
             [peakHit, peakMetric] = obj.findStrongestPeakExcluding( ...
                 residualSignal, excludedPaths, observationWeights);
@@ -483,7 +467,7 @@ classdef GiFreeEstimator < handle
 
             delayVal = peakHit(1);
             intDoppler = peakHit(2);
-            if obj.Config.SpreadWidth == 0
+            if obj.Config.DirichletRadius == 0
                 fracDoppler = intDoppler;
             else
                 fracDoppler = obj.refineFractionalDoppler(residualSignal, delayVal, intDoppler);
@@ -595,6 +579,32 @@ classdef GiFreeEstimator < handle
 
     methods (Access = private)
 
+        % COMPUTECFARTHRESHOLD 基于加权残差与有效导频功率计算 CFAR 门限。
+        function threshold = computeCfarThreshold(obj, weightedResidual, numSubcarriers, thresholdScale)
+            if nargin < 4
+                thresholdScale = 1.0;
+            end
+
+            numCandidates = (obj.Config.MaxDelaySamples + 1) * ...
+                (2 * obj.Config.MaxDopplerIdx + 1);
+            cfarCoeff = log(numCandidates / obj.cfarFalseAlarmProb);
+            residualPower = real(weightedResidual' * weightedResidual) / numSubcarriers;
+            threshold = residualPower * obj.resolveEffectiveCfarPilotAmpSq() * ...
+                cfarCoeff * thresholdScale;
+        end
+
+        % RESOLVEEFFECTIVECFARPILOTAMPSQ 返回 CFAR 门限应使用的有效导频功率。
+        function effectivePilotAmpSq = resolveEffectiveCfarPilotAmpSq(obj)
+            pilotAmpSq = obj.Config.PilotAmplitude^2;
+            if ~obj.Config.EnableCfarPilotPowerNormalization
+                effectivePilotAmpSq = pilotAmpSq;
+                return;
+            end
+
+            pilotAmpSqCap = 10 ^ (obj.Config.CfarPilotPowerCapDb / 10);
+            effectivePilotAmpSq = min(pilotAmpSq, pilotAmpSqCap);
+        end
+
         % RESOLVESEARCHMODE 解析单次 OMP 调用应使用的搜索模式。
         function searchMode = resolveSearchMode(obj, searchModeOverride)
             if nargin < 2 || isempty(searchModeOverride)
@@ -650,7 +660,7 @@ classdef GiFreeEstimator < handle
                 return;
             end
 
-            if obj.Config.SpreadWidth >= adaptiveSpreadThreshold || ...
+            if obj.Config.DirichletRadius >= adaptiveSpreadThreshold || ...
                     prevDepthImproveRatio < adaptiveImproveRatio || hasUncertainState
                 currentBeamWidth = probeBeamWidth;
             end

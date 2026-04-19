@@ -27,12 +27,8 @@ classdef EpReceiver < handle
             rxNoPrefix = rxSignal(obj.Config.PrefixLength + 1:end);
 
             % DAFT 鍙樻崲
-            if upper(obj.Config.WaveformType) == "AFDM"
-                daftRx = AfdmTransforms.daft(rxNoPrefix, ...
-                    obj.Config.ChirpParam1, obj.Config.ChirpParam2);
-            else
-                daftRx = AfdmTransforms.dft(rxNoPrefix);
-            end
+            daftRx = AfdmTransforms.daft(rxNoPrefix, ...
+                obj.Config.ChirpParam1, obj.Config.ChirpParam2);
 
             % 鑾峰彇绛夋晥淇￠亾鐭╅樀
             if obj.CsiMode == "Perfect"
@@ -75,11 +71,7 @@ classdef EpReceiver < handle
             mockTxFrame = zeros(N, 1);
             mockTxFrame(obj.Config.PilotPos1) = sqrt(obj.CurrentPilotPower);
 
-            if upper(obj.Config.WaveformType) == "AFDM"
-                timePilot = AfdmTransforms.idaft(mockTxFrame, c1, c2);
-            else
-                timePilot = AfdmTransforms.idft(mockTxFrame);
-            end
+            timePilot = AfdmTransforms.idaft(mockTxFrame, c1, c2);
 
             residual = rxSignalDaft;
             estPaths = zeros(obj.Config.NumPaths, 3);
@@ -102,11 +94,7 @@ classdef EpReceiver < handle
                     shifted = circshift(timePilot, curDelay);
                     candidates = shifted .* dopplerPhaseMat;  % 大小: N x numDoppler
 
-                    if upper(obj.Config.WaveformType) == "AFDM"
-                        daftCand = AfdmTransforms.daft(candidates, c1, c2);
-                    else
-                        daftCand = AfdmTransforms.dft(candidates);
-                    end
+                    daftCand = AfdmTransforms.daft(candidates, c1, c2);
 
                     for col = 1:size(daftCand, 2)
                         daftCand(:, col) = obj.applyPeakWindow(daftCand(:, col), 3);
@@ -158,18 +146,13 @@ classdef EpReceiver < handle
         % ================================================================
         % ================================================================
         % simulatePathEffect: 仿真单路径对导频的响应。
-        function [daftSig, energy] = simulatePathEffect(obj, delay, doppler, timePilot, chirpParams)
+        function [daftSig, energy] = simulatePathEffect(~, delay, doppler, timePilot, chirpParams)
             N = size(timePilot, 1);
             timeVec = (0:N - 1).';
             phaseRot = exp(-1j * 2 * pi * doppler / N .* timeVec);
 
             pathTimeDomain = circshift(timePilot, delay) .* phaseRot;
-
-            if upper(obj.Config.WaveformType) == "AFDM"
-                daftSig = AfdmTransforms.daft(pathTimeDomain, chirpParams(1), chirpParams(2));
-            else
-                daftSig = AfdmTransforms.dft(pathTimeDomain);
-            end
+            daftSig = AfdmTransforms.daft(pathTimeDomain, chirpParams(1), chirpParams(2));
 
 
             if nargout > 1

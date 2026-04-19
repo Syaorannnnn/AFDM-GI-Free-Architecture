@@ -132,7 +132,7 @@ classdef GiFreeSystem < handle
         % RUNTRIALORACLEID2P 以真实数据消除 ID2P，测试信道估计性能上界。
         %
         %   用已知发射数据完美消除 ID2P 干扰，然后仅做单次 OMP + LMMSE。
-        %   该曲线表示 "若 CLTP 软判决完美准确，GI-Free 信道估计能达到的上界"。
+        %   该曲线表示 "若 CLIP 软判决完美准确，GI-Free 信道估计能达到的上界"。
         function result = runTrialOracleId2p(obj, dataSnrLin, noisePowerLin, ...
                 delays, dopplers, gains)
             cfg = obj.Config;
