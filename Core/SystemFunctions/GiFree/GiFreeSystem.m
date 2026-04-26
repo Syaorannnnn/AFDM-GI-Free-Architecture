@@ -129,59 +129,6 @@ classdef GiFreeSystem < handle
             result.paprDb       = 0;
         end
 
-        % RUNTRIALORACLEID2P 以真实数据消除 ID2P，测试信道估计性能上界。
-        %
-        %   用已知发射数据完美消除 ID2P 干扰，然后仅做单次 OMP + LMMSE。
-        %   该曲线表示 "若 CLIP 软判决完美准确，GI-Free 信道估计能达到的上界"。
-        function result = runTrialOracleId2p(obj, dataSnrLin, noisePowerLin, ...
-                delays, dopplers, gains)
-            cfg = obj.Config;
-            numSc = cfg.NumSubcarriers;
-
-            if cfg.UseDynamicPilot
-                cfg.CurrentDataSnrLin = dataSnrLin;
-            end
-
-            [txFrame, txDataIndices] = obj.Transmitter.transmit(dataSnrLin);
-
-            pathParams = [delays(:), dopplers(:), gains(:)];
-            trueEffectiveChannel = obj.ChannelBuilder.buildEffectiveChannel(pathParams);
-
-            noiseVec = sqrt(noisePowerLin / 2) * (randn(numSc,1) + 1j*randn(numSc,1));
-            rxSignal = trueEffectiveChannel * txFrame + noiseVec;
-
-            % Oracle: 用真实数据帧完美消除 ID2P
-            dataFrame = zeros(numSc, 1);
-            dataFrame(cfg.DataPos1) = txFrame(cfg.DataPos1);
-            cleanPilotSig = rxSignal - trueEffectiveChannel * dataFrame;
-
-            % 无 ID2P 的单次 OMP 估计
-            [~, estEffChannel] = obj.Estimator.estimateByOmp(cleanPilotSig, 0);
-
-            % 用估计信道做 LMMSE 检测
-            pilotFrame = zeros(numSc, 1);
-            pilotFrame(cfg.PilotPos1) = cfg.PerPilotAmplitude * cfg.PilotSequence;
-            cleanDataSig = rxSignal - estEffChannel * pilotFrame;
-            regParam = noisePowerLin / dataSnrLin;
-            hData = estEffChannel(:, cfg.DataPos1);
-            numData = cfg.NumDataSymbols;
-            estData = (hData' * hData + regParam * speye(numData)) \ ...
-                      (hData' * cleanDataSig);
-            detIndices = qamdemod(estData / sqrt(dataSnrLin), ...
-                cfg.ModulationOrder, 'UnitAveragePower', true);
-
-            bitsPerSymbol = log2(cfg.ModulationOrder);
-            [bitErrSys, ~, totalBits] = GiFreeSystem.countBitErrors( ...
-                txDataIndices, detIndices, bitsPerSymbol);
-
-            result.bitErrorsSys = bitErrSys;
-            result.bitErrorsRef = 0;
-            result.totalBits    = totalBits;
-            result.mseSystem    = norm(full(estEffChannel) - full(trueEffectiveChannel), 'fro')^2 / ...
-                max(norm(full(trueEffectiveChannel), 'fro')^2, 1e-20);
-            result.paprDb       = 0;
-        end
-
     end
 
     methods (Static)

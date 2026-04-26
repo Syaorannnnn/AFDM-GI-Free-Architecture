@@ -63,11 +63,14 @@ classdef GiFreeConfig < handle
         PathStabilityThreshold = 2
         PathStabilityDopplerTolerance = 1
         UseWeightedPilotMetric = true
+        UseMatchedPilotMetric = false % 使用完整复合响应归一化匹配作为 OMP 粗搜统计量
+        EnableCfarDiagnostic = false  % 输出 metric/threshold 诊断样本，不改变检测流程
         PilotClusterWidth = 2
         % 动态导频模式：导频功率跟踪数据 SNR，使 pilot/noise 恒定（与 EP 行为对齐）
         UseDynamicPilot = false
         DynamicPilotBaseDb = 35   % 动态模式下固定的 pilot/noise 比 (dB)
         CurrentDataSnrLin = 1     % 当前 trial 的数据 SNR 线性值（由 GiFreeSystem 外部设置）
+        CfarFalseAlarmProb = 1e-3 % CFAR 目标虚警率
         EnableCfarPilotPowerNormalization = false
         CfarPilotPowerCapDb = 45   % CFAR 门限参考导频功率上限 (dB)
     end
@@ -201,6 +204,31 @@ classdef GiFreeConfig < handle
 
         function val = get.PerPilotAmplitude(obj)
             val = obj.PilotAmplitude;
+        end
+
+        function newConfig = copy(obj)
+        % COPY 创建 GiFreeConfig 对象的深拷贝。
+        %
+        % 输出:
+        %   newConfig - (GiFreeConfig) 与当前对象属性值一致的新配置对象。
+
+            newConfig = GiFreeConfig();
+            propertyMetaList = metaclass(obj).PropertyList;
+            for propertyIdx = 1:numel(propertyMetaList)
+                propertyMeta = propertyMetaList(propertyIdx);
+                if iscell(propertyMetaList)
+                    propertyMeta = propertyMetaList{propertyIdx};
+                end
+
+                if propertyMeta.Dependent || propertyMeta.Constant
+                    continue;
+                end
+
+                propertyName = propertyMeta.Name;
+                if isprop(newConfig, propertyName)
+                    newConfig.(propertyName) = obj.(propertyName);
+                end
+            end
         end
 
     end

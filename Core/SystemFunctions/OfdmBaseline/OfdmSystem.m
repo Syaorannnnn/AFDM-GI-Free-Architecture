@@ -116,8 +116,8 @@ classdef OfdmSystem < handle
             % 发射
             [txSig, txDataIdx, pilotSymbols] = obj.transmit();
 
-            % 物理信道 (与 EpSystem 使用同一 LtvChannel)
-            physH = LtvChannel(Ntotal, pathDelays, pathDopplers, pathGains);
+            % 物理信道，与 EpSystem 使用同一时变信道构造函数。
+            physH = buildTimeVaryingChannel(Ntotal, pathDelays, pathDopplers, pathGains);
 
             % 加噪
             noiseVec = sqrt(noisePowerLin / 2) * (randn(Ntotal, 1) + 1j * randn(Ntotal, 1));

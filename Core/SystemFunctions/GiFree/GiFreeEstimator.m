@@ -25,8 +25,8 @@ classdef GiFreeEstimator < handle
     end
 
     properties (Constant)
-        % 虚警率3%，在高压力场景下降低漏检真实路径的风险
-        cfarFalseAlarmProb = 0.03
+        % OMP+CFAR 默认目标虚警率（Pfa）。
+        cfarFalseAlarmProb = 1e-3;
     end
 
     methods
@@ -65,14 +65,38 @@ classdef GiFreeEstimator < handle
                 rxSignal, ompRegParam, observationWeights, zeros(0, 3), 'greedy');
         end
 
+        % ESTIMATEBYOMPWITHFIXEDTHRESHOLD 使用外部固定门限执行 OMP 初始化。
+        function [estPaths, hEffective, ompDiag] = estimateByOmpWithFixedThreshold( ...
+                obj, rxSignal, ompRegParam, observationWeights, fixedThreshold)
+            if nargin < 3 || isempty(ompRegParam)
+                ompRegParam = 0;
+            end
+            if nargin < 4 || isempty(observationWeights)
+                observationWeights = ones(size(rxSignal));
+            end
+            if nargin < 5
+                error('GiFreeEstimator:MissingFixedThreshold', ...
+                    'estimateByOmpWithFixedThreshold 需要传入 fixedThreshold。');
+            end
+            validateattributes(fixedThreshold, {'numeric'}, ...
+                {'scalar', 'finite', 'nonnegative'}, mfilename, 'fixedThreshold');
+
+            [estPaths, hEffective, ompDiag] = obj.estimateByGreedyOmp( ...
+                rxSignal, ompRegParam, observationWeights, ...
+                zeros(0, 3), 'fixed_threshold', fixedThreshold);
+        end
+
         % ESTIMATEBYGREEDYOMP 执行标准 OMP，并可从已有支撑集继续扩展。
         function [estPaths, hEffective, ompDiag] = estimateByGreedyOmp( ...
-                obj, rxSignal, ompRegParam, observationWeights, seedPaths, modeLabel)
+                obj, rxSignal, ompRegParam, observationWeights, seedPaths, modeLabel, fixedThreshold)
             if nargin < 5
                 seedPaths = zeros(0, 3);
             end
             if nargin < 6 || isempty(modeLabel)
                 modeLabel = 'greedy';
+            end
+            if nargin < 7
+                fixedThreshold = [];
             end
 
             numSubcarriers = obj.Config.NumSubcarriers;
@@ -107,7 +131,12 @@ classdef GiFreeEstimator < handle
                 [peakHit, peakMetric] = obj.findStrongestPeakExcluding(residual, estPaths, observationWeights);
 
                 weightedResidual = sqrt(observationWeights) .* residual;
-                threshold = obj.computeCfarThreshold(weightedResidual, numSubcarriers, 1.0);
+                threshold = obj.resolveOmpThreshold( ...
+                    weightedResidual, numSubcarriers, fixedThreshold);
+                if obj.Config.EnableCfarDiagnostic
+                    ompDiag.cfarMetricOverThresholdSamples(end+1, 1) = ...
+                        peakMetric / max(threshold, eps);
+                end
                 if isempty(peakHit) || peakMetric < threshold
                     break;
                 end
@@ -243,7 +272,7 @@ classdef GiFreeEstimator < handle
                     expandedStates = obj.pruneBeamStatesBySignature(expandedStates);
                 end
 
-                residualNormVec = [expandedStates.weightedResidualNorm].';
+                residualNormVec = [expandedStates.weightedResidualNorm];
                 [~, sortIdx] = sort(residualNormVec, 'ascend');
                 keepCount = min(currentBeamWidth, numel(sortIdx));
                 beamStates = expandedStates(sortIdx(1:keepCount));
@@ -271,7 +300,7 @@ classdef GiFreeEstimator < handle
                 return;
             end
 
-            residualNormVec = [beamStates.weightedResidualNorm].';
+            residualNormVec = [beamStates.weightedResidualNorm];
             [~, bestStateIdx] = min(residualNormVec);
             bestState = beamStates(bestStateIdx);
             [estPaths, hEffective, greedyDiag] = obj.estimateByGreedyOmp( ...
@@ -297,10 +326,8 @@ classdef GiFreeEstimator < handle
                             continue;
                         end
                     end
-                    metric = obj.scoreCandidate( ...
-                        residualSignal, observationWeights, delayVal, dopplerIdx, obj.Config.NumSubcarriers, ...
-                        obj.Config.LocStep, obj.Config.ChirpParam1, obj.Config.ChirpParam2, ...
-                        obj.Config.PilotPos0, obj.Config.PilotSequence, obj.Config.PerPilotAmplitude);
+                    metric = obj.scoreSearchCandidate( ...
+                        residualSignal, observationWeights, delayVal, dopplerIdx);
                     if metric >= threshold
                         candidateTable(end+1, :) = [delayVal, dopplerIdx, metric]; %#ok<AGROW>
                     end
@@ -433,7 +460,7 @@ classdef GiFreeEstimator < handle
             for candidateIdx = 1:length(delayVecFlat)
                 delayVal = delayVecFlat(candidateIdx);
                 dopplerIdx = dopplerVecFlat(candidateIdx);
-                metrics(candidateIdx) = obj.scoreCandidate( ...
+                metrics(candidateIdx) = obj.scoreSearchCandidate( ...
                     residualSignal, observationWeights, delayVal, dopplerIdx, ...
                     numSubcarriers, locStep, chirpC1, chirpC2, pilotPos0, pilotSeq, pilotAmp);
             end
@@ -516,7 +543,7 @@ classdef GiFreeEstimator < handle
                     if ~isempty(excludedSig) && any(excludedSig(:,1) == delayVal & excludedSig(:,2) == dopplerIdx)
                         continue;
                     end
-                    metric = obj.scoreCandidate( ...
+                    metric = obj.scoreSearchCandidate( ...
                         residualSignal, observationWeights, delayVal, dopplerIdx, ...
                         numSubcarriers, locStep, chirpC1, chirpC2, pilotPos0, pilotSeq, pilotAmp);
                     if metric > bestMetric
@@ -537,7 +564,6 @@ classdef GiFreeEstimator < handle
             locIndex = dopplerIdx + locStep * delayVal;
             clusterWidth = max(round(obj.Config.PilotClusterWidth), 0);
 
-            zCenter = 0;
             clusterEnergy = 0;
             responseColIdx = mod(pilotPos0 - locIndex, numSubcarriers);
             phaseVal = exp(1j * 2 * pi * (chirpC1 * delayVal^2 ...
@@ -554,6 +580,53 @@ classdef GiFreeEstimator < handle
             if obj.Config.UseWeightedPilotMetric && clusterWidth > 0
                 metric = metric + 0.35 * clusterEnergy / (2 * clusterWidth + 1);
             end
+        end
+
+        % SCORESEARCHCANDIDATE 按配置选择 OMP 粗搜统计量。
+        function metric = scoreSearchCandidate(obj, residualSignal, obsWeights, ...
+                delayVal, dopplerIdx, numSubcarriers, locStep, chirpC1, chirpC2, ...
+                pilotPos0, pilotSeq, pilotAmp)
+            if nargin < 7
+                numSubcarriers = obj.Config.NumSubcarriers;
+                locStep = obj.Config.LocStep;
+                chirpC1 = obj.Config.ChirpParam1;
+                chirpC2 = obj.Config.ChirpParam2;
+                pilotPos0 = obj.Config.PilotPos0;
+                pilotSeq = obj.Config.PilotSequence;
+                pilotAmp = obj.Config.PerPilotAmplitude;
+            end
+
+            if obj.Config.UseMatchedPilotMetric
+                metric = obj.scoreCandidateMatched( ...
+                    residualSignal, obsWeights, delayVal, dopplerIdx);
+                return;
+            end
+
+            metric = obj.scoreCandidate( ...
+                residualSignal, obsWeights, delayVal, dopplerIdx, numSubcarriers, ...
+                locStep, chirpC1, chirpC2, pilotPos0, pilotSeq, pilotAmp);
+        end
+
+        % SCORECANDIDATEMATCHED 使用完整复合响应的归一化匹配得分。
+        function metric = scoreCandidateMatched(obj, residualSignal, obsWeights, ...
+                delayVal, dopplerIdx)
+            responseVec = obj.ChannelBuilder.buildCompositePilotResponse(delayVal, dopplerIdx);
+            if isempty(obsWeights)
+                weightedResponse = responseVec(:);
+                weightedResidual = residualSignal(:);
+            else
+                weightSqrt = sqrt(obsWeights(:));
+                weightedResponse = weightSqrt .* responseVec(:);
+                weightedResidual = weightSqrt .* residualSignal(:);
+            end
+
+            responsePower = real(weightedResponse' * weightedResponse);
+            if responsePower < 1e-15
+                metric = 0;
+                return;
+            end
+
+            metric = abs(weightedResponse' * weightedResidual)^2 / responsePower;
         end
 
         % REFINEFRACTIONALDOPPLER 在整数 Doppler 附近做一维分数偏移搜索。
@@ -575,23 +648,28 @@ classdef GiFreeEstimator < handle
             end
         end
 
-    end
-
-    methods (Access = private)
-
         % COMPUTECFARTHRESHOLD 基于加权残差与有效导频功率计算 CFAR 门限。
         function threshold = computeCfarThreshold(obj, weightedResidual, numSubcarriers, thresholdScale)
             if nargin < 4
                 thresholdScale = 1.0;
             end
 
+            % 与公开 helper 保持一致：CFAR 系数使用 log(M/Pfa)。
             numCandidates = (obj.Config.MaxDelaySamples + 1) * ...
                 (2 * obj.Config.MaxDopplerIdx + 1);
-            cfarCoeff = log(numCandidates / obj.cfarFalseAlarmProb);
+            cfarCoeff = log(numCandidates / obj.resolveCfarFalseAlarmProb());
             residualPower = real(weightedResidual' * weightedResidual) / numSubcarriers;
-            threshold = residualPower * obj.resolveEffectiveCfarPilotAmpSq() * ...
-                cfarCoeff * thresholdScale;
+            if obj.Config.UseMatchedPilotMetric
+                threshold = residualPower * cfarCoeff * thresholdScale;
+            else
+                threshold = residualPower * obj.resolveEffectiveCfarPilotAmpSq() * ...
+                    cfarCoeff * thresholdScale;
+            end
         end
+
+    end
+
+    methods (Access = private)
 
         % RESOLVEEFFECTIVECFARPILOTAMPSQ 返回 CFAR 门限应使用的有效导频功率。
         function effectivePilotAmpSq = resolveEffectiveCfarPilotAmpSq(obj)
@@ -603,6 +681,29 @@ classdef GiFreeEstimator < handle
 
             pilotAmpSqCap = 10 ^ (obj.Config.CfarPilotPowerCapDb / 10);
             effectivePilotAmpSq = min(pilotAmpSq, pilotAmpSqCap);
+        end
+
+        % RESOLVECFARFALSEALARMPROB 返回当前配置的 CFAR 目标虚警率。
+        function targetFalseAlarmProb = resolveCfarFalseAlarmProb(obj)
+            targetFalseAlarmProb = obj.cfarFalseAlarmProb;
+            if isprop(obj.Config, 'CfarFalseAlarmProb')
+                targetFalseAlarmProb = obj.Config.CfarFalseAlarmProb;
+            end
+            if ~(isnumeric(targetFalseAlarmProb) && isscalar(targetFalseAlarmProb) && ...
+                    targetFalseAlarmProb > 0 && targetFalseAlarmProb < 1)
+                error('GiFreeEstimator:InvalidCfarFalseAlarmProb', ...
+                    'CfarFalseAlarmProb 必须是 (0,1) 内的标量。');
+            end
+        end
+
+        % RESOLVEOMPTHRESHOLD 统一解析 OMP 当前轮应使用的检测门限。
+        function threshold = resolveOmpThreshold(obj, weightedResidual, numSubcarriers, fixedThreshold)
+            if isempty(fixedThreshold)
+                threshold = obj.computeCfarThreshold(weightedResidual, numSubcarriers, 1.0);
+                return;
+            end
+
+            threshold = fixedThreshold;
         end
 
         % RESOLVESEARCHMODE 解析单次 OMP 调用应使用的搜索模式。
@@ -675,14 +776,15 @@ classdef GiFreeEstimator < handle
                 'candidateCountPerDepth', zeros(0, 1), ...
                 'fracRefineCallCount', 0, ...
                 'weightedResidualNormPerDepth', zeros(0, 1), ...
-                'finalSupportSignature', '');
+                'finalSupportSignature', '', ...
+                'cfarMetricOverThresholdSamples', zeros(0, 1));
         end
 
         % APPENDRESIDUALNORM 记录当前加权残差范数。
         function residualVec = appendResidualNorm(~, residualVec, residualSignal, observationWeights, numSubcarriers)
             weightedResidual = sqrt(observationWeights) .* residualSignal;
             residualNorm = real(weightedResidual' * weightedResidual) / numSubcarriers;
-            residualVec(end+1, 1) = residualNorm; %#ok<AGROW>
+            residualVec(end+1, 1) = residualNorm;
         end
 
         % BUILDSUPPORTSIGNATURE 生成排序后的 delay-doppler 支撑签名。
@@ -767,7 +869,7 @@ classdef GiFreeEstimator < handle
                 size(secondChoiceProposalTable, 1));
             if keepSecondCount > 0
                 selectedProposalTable = [selectedProposalTable; ...
-                    secondChoiceProposalTable(1:keepSecondCount, :)]; %#ok<AGROW>
+                    secondChoiceProposalTable(1:keepSecondCount, :)];
             end
 
             if size(selectedProposalTable, 1) >= refineBudget
@@ -778,7 +880,7 @@ classdef GiFreeEstimator < handle
             keepRemainCount = min(refineBudget - size(selectedProposalTable, 1), ...
                 size(remainingProposalTable, 1));
             if keepRemainCount > 0
-                selectedProposalTable = [selectedProposalTable; remainingProposalTable(1:keepRemainCount, :)]; %#ok<AGROW>
+                selectedProposalTable = [selectedProposalTable; remainingProposalTable(1:keepRemainCount, :)];
             end
         end
 

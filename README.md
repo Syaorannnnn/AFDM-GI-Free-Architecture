@@ -1,40 +1,57 @@
 # AFDM 系统性能研究
 
-基于 MATLAB 的**仿射频分复用（AFDM）**系统综合仿真框架，涵盖嵌入式导频（EP）基线系统、GI-Free 导频分离架构，以及分数多普勒信道估计。
+本仓库是基于 MATLAB 的 AFDM 系统仿真与论文实验工程，当前主线已完成第四章实验重构与两个 worktree 成果整合。代码覆盖 OFDM 基线、嵌入式导频（EP）基线、GI-Free 架构、分数 Doppler 信道建模，以及最终 CLIP 接收机的主干仿真流程。
 
-> **Status**: Active development · MATLAB R2023b+ · Communications Toolbox required
+> 状态：阶段性完成 · MATLAB R2023b+ · 需要 Communications Toolbox
 
-## 研究动机
+## 项目范围
 
-AFDM 是一种基于 chirp 的多载波波形，通过离散仿射傅里叶变换（DAFT）的前 chirp 参数 $c_1$ 在双色散（时延-多普勒）信道中实现全分集增益。尽管 AFDM 在误码率层面显著优于 OFDM，但传统的**嵌入式导频（EP）**方案仍需为导频保留保护带；原始 GI-Free 方案仅适用于整数多普勒场景，且采用经验检测门限，工程适用性有限。
+AFDM 使用 DAFT 的 chirp 参数在双色散信道中获得分集增益。传统 EP 架构通过保护带隔离导频与数据，但会降低频谱效率。GI-Free 架构保留 DAFT 域单导频并移除保护带，使其余 $N-1$ 个子载波承载数据；代价是数据到导频干扰（ID2P）进入路径估计链路。
 
-本项目依次解决两个开放性问题：EP 的频谱效率瓶颈，以及 GI-Free 的整数多普勒局限性。
+本工程的重点是把 GI-Free 从整数 Doppler、固定经验门限的早期设定推进到可复现实验主线。主线实现包含 OMP+CFAR 路径检测、分数 Doppler Dirichlet 核建模、动态导频功率跟踪、路径稳定度门控、置信门控清洗，以及最终路径诊断输出。
 
-## 系统架构
+## 目录结构
 
-### EP 基线系统
+`Core/` 保存可复用系统模块。GI-Free 主体位于 `Core/SystemFunctions/GiFree/`，EP 与 OFDM 基线分别位于 `Core/SystemFunctions/EmbeddedPilot/` 和 `Core/SystemFunctions/OfdmBaseline/`。通用物理时变信道函数为 `Core/buildTimeVaryingChannel.m`。
 
-嵌入式导频方案将单个导频置于 DAFT 域索引 0 处，前后各设 $Q$ 个零填充保护子载波。保护间隔从物理上隔绝了数据对导频的干扰（ID2P），使得接收端可以直接通过门限检测提取路径并估计增益。EP 系统在本项目中作为性能基线和频谱效率参照。
+`Sim/MainSimulation.m` 是第四章主仿真入口，只负责公共参数、日志目录和 Part 1 至 Part 4 的分派。主干实验脚本位于 `Sim/experiments/`，共享辅助函数位于 `Sim/helpers/`。
 
-### GI-Free 架构（本文工作）
+`docs/memory/` 保存理论、公式、实现状态和第四章整合记录。涉及 AFDM/GI-Free 技术讨论前，应先读取该目录下的索引和核心文档。
 
-GI-Free 架构保留了 DAFT 域索引 0 处的导频，但完全去除了保护零子载波。其余 $N-1$ 个子载波全部承载数据，频谱效率达到 $(N-1)/N$。由于没有保护间隔，ID2P 直接污染导频响应，因此需要全新的接收机设计。
+## 主线实验
 
-**接收机流水线（三阶段 turbo 迭代）：**
+| Part | 脚本 | 作用 |
+|------|------|------|
+| Part 1 | `Sim/experiments/Exp1_AfdmVsOfdm.m` | AFDM-EP 与 CP-OFDM 在整数 Doppler 双色散信道下的 BER 基线对比 |
+| Part 2 | `Sim/experiments/Exp2_CfarThreshold.m` | 固定导频阶段一检测器归因，比较 Zhou 固定门限、Zhou CFAR、OMP 固定门限和 OMP CFAR |
+| Part 3 | `Sim/experiments/Exp3_DynamicPilotGain.m` | 固定导频与动态导频对比，输出 BER、NMSE 与路径检测概率 `Pd` |
+| Part 4 | `Sim/experiments/Exp4_FractionalDoppler.m` | EP 与 GI-Free ProGuard-CLIP 在分数 Doppler 场景下的对比 |
 
-1. **Phase 1 — 干扰感知粗估计。** OMP 配合 CFAR 自适应停止门限检测路径，LMMSE 均衡产生初始数据估计并消除 ID2P。
+## 核心实现
 
-2. **Phase 2 — 数据导向精提取。** 利用软符号重构全帧参考，通过 Dirichlet 核匹配精炼分数多普勒，PCG 稀疏求解器做均衡。
+GI-Free 配置由 `GiFreeConfig` 管理，包含 Theorem-1 校验、动态导频、CFAR 目标虚警率和 R2 匹配统计量开关。`GiFreeEstimator` 提供 OMP+CFAR、固定门限 OMP 和完整复合响应归一化匹配统计量。`GiFreeReceiver` 实现 CLIP 接收流程，并输出 `rxDiag.finalEstimatedPaths` 与 `rxDiag.finalPathCount`，供 Exp3 统计 `Pd`。
 
-3. **后判决精炼。** 最终增益重估与噪声功率估计。
+R2 匹配统计量通过 `UseMatchedPilotMetric` 控制，默认值为 `false`。主干 CLIP 配置在 `createClipPilotConfigPair.m` 与 `Exp4_FractionalDoppler.m` 中显式开启该开关。
 
-## 核心技术贡献
+## 运行与验证
 
-- **分数多普勒支持** — 基于 Dirichlet 核显式建模多普勒泄漏，割线法精搜将估计精度推至 $10^{-4}$ 量级，突破整数多普勒假设下的误差平层。
-- **CFAR 自适应检测门限** — 从统计原理出发推导自适应门限，替代固定经验系数，具备随残差功率实时下降的双层自适应能力。
+运行完整第四章主线：
+
+```matlab
+addpath(genpath(pwd));
+MainSimulation;
+```
+
+运行当前轻量回归测试：
+
+```matlab
+addpath(genpath(pwd));
+results = runtests('Tests/testSimulationRefactor.m');
+assertSuccess(results);
+```
 
 ## 环境要求
 
-- MATLAB **R2023b** 或更高版本
-- **Communications Toolbox**
+- MATLAB R2023b 或更高版本
+- Communications Toolbox
 

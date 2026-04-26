@@ -1,26 +1,5 @@
 classdef GiFreeReceiver < handle
-% GIFREERECEIVER - CLIP 三阶段接收处理主流程
-%
-%   描述:
-%   实现 GI-Free 接收端 CLIP 流程：
-%   1) 粗锁定阶段: 干扰感知初始化（OMP + LMMSE + 置信门控）
-%   2) 迭代精炼阶段: 数据导向精炼（Doppler/增益精炼 + 残差注入）
-%   3) 最终定型阶段: 判决反馈后处理（可选）
-%
-%   语法:
-%   receiverObj = GiFreeReceiver(cfg, estimator);
-%   [detectedIdx, nmse, estHEff] = receiverObj.receive(rxSignal, hTrue, dataSnrLin, noisePowerLin);
-%   [detectedIdx, nmse, estHEff, rxDiag] = receiverObj.receive( ...
-%       rxSignal, hTrue, dataSnrLin, noisePowerLin);
-%
-%   输出:
-%   detectedIdx - (Kx1) 数据符号索引估计。
-%   nmse        - (double) 估计信道相对真值的 NMSE。
-%   estHEff     - (NxN) 最终估计有效信道。
-%   rxDiag      - (struct) 接收机诊断信息，包含 OMP 调用统计、支撑变化计数与阶段残差。
-%
-%   版本历史:
-%   2026-04-01 - Aiden - 注释规范化。
+% GIFREERECEIVER - CLIP 三阶段接收处理主流程。
     properties (SetAccess = private)
         Config
         Estimator
@@ -349,6 +328,8 @@ classdef GiFreeReceiver < handle
             dataResidual = rxSignal - effectiveChannel * txFrameEst;
             rxDiag.dataResidualPower = real(dataResidual' * dataResidual) / numSc;
             rxDiag.pilotDataPowerRatio = pilotAmpTot^2 / dataSnrLin;
+            rxDiag.finalEstimatedPaths = estPaths;
+            rxDiag.finalPathCount = size(estPaths, 1);
             [~, finalConfidence] = GiFreeReceiver.computeFeedbackSymbols( ...
                 estFullSig(dataPos1), scaledConstellation, noisePowerLin, obj.Config.FeedbackMode);
             rxDiag.symbolConfidenceMean = mean(finalConfidence);
@@ -482,6 +463,8 @@ classdef GiFreeReceiver < handle
                 'ompCallCount', 0, ...
                 'beamCallCount', 0, ...
                 'bootstrapDiag', [], ...
+                'finalEstimatedPaths', zeros(0, 3), ...
+                'finalPathCount', 0, ...
                 'regParamFinal', 0, ...
                 'dataResidualPower', 0, ...
                 'pilotDataPowerRatio', 0, ...

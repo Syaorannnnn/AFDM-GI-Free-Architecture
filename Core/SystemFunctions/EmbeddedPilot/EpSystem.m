@@ -30,7 +30,7 @@ classdef EpSystem < handle
             noisePowerLin = 1 / dataSnrLin;
 
             [txSig, txData] = obj.Transmitter.transmit(pilotPowerLin);
-            physH = LtvChannel(totalSc, pathDelays, pathDopplers, pathGains);
+            physH = buildTimeVaryingChannel(totalSc, pathDelays, pathDopplers, pathGains);
 
             noiseVec = sqrt(noisePowerLin / 2) * (randn(totalSc, 1) + 1j * randn(totalSc, 1));
             rxSig = physH * txSig + noiseVec;
@@ -51,7 +51,7 @@ classdef EpSystem < handle
             noisePowerLin = 1 / dataSnrLin;
 
             [txSig, txData] = obj.Transmitter.transmit(pilotPowerLin);
-            physH = LtvChannel(totalSc, pathDelays, pathDopplers, pathGains);
+            physH = buildTimeVaryingChannel(totalSc, pathDelays, pathDopplers, pathGains);
 
             noiseVec = sqrt(noisePowerLin / 2) * (randn(totalSc, 1) + 1j * randn(totalSc, 1));
             rxSig = physH * txSig + noiseVec;
